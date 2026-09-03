@@ -82,7 +82,8 @@ func colorFromRGBA(c color.Color) rgb {
 	}
 }
 
-// renderCoverQuadrant renders an image using 2x2 Unicode quadrant sub-pixels with 24-bit TrueColor.
+// renderCoverQuadrant renders an image using 2x2 Unicode quadrant sub-pixels with 24-bit TrueColor,
+// compensating for the non-square aspect ratio of monospace terminal font cells (~1:2).
 func renderCoverQuadrant(imgData []byte, cols, rows int) ([]string, error) {
 	img, _, err := image.Decode(bytes.NewReader(imgData))
 	if err != nil {
@@ -96,25 +97,62 @@ func renderCoverQuadrant(imgData []byte, cols, rows int) ([]string, error) {
 		return nil, fmt.Errorf("empty image bounds")
 	}
 
+	// Monospace terminal cells are approximately 1:2.05 in aspect ratio (width : height)
+	cellAspect := 2.05
+	dispW := float64(cols)
+	dispH := float64(rows) * cellAspect
+
+	srcAspect := float64(srcW) / float64(srcH)
+	dispAspect := dispW / dispH
+
+	var scaleX, scaleY, offX, offY float64
+	if srcAspect > dispAspect {
+		scaleX = 1.0
+		scaleY = dispAspect / srcAspect
+		offX = 0.0
+		offY = (1.0 - scaleY) / 2.0
+	} else {
+		scaleY = 1.0
+		scaleX = srcAspect / dispAspect
+		offY = 0.0
+		offX = (1.0 - scaleX) / 2.0
+	}
+
 	pixelW := cols * 2
 	pixelH := rows * 2
+
+	samplePixel := func(px, py int) rgb {
+		u := (float64(px) + 0.5) / float64(pixelW)
+		v := (float64(py) + 0.5) / float64(pixelH)
+
+		imgU := (u - offX) / scaleX
+		imgV := (v - offY) / scaleY
+
+		if imgU < 0.0 || imgU >= 1.0 || imgV < 0.0 || imgV >= 1.0 {
+			return rgb{r: 20, g: 24, b: 30} // subtle dark border background
+		}
+
+		sx := bounds.Min.X + int(imgU*float64(srcW))
+		sy := bounds.Min.Y + int(imgV*float64(srcH))
+		if sx >= bounds.Max.X {
+			sx = bounds.Max.X - 1
+		}
+		if sy >= bounds.Max.Y {
+			sy = bounds.Max.Y - 1
+		}
+		return colorFromRGBA(img.At(sx, sy))
+	}
 
 	var lines []string
 	for r := 0; r < rows; r++ {
 		var sb strings.Builder
 		for c := 0; c < cols; c++ {
-			coords := [4][2]int{
-				{c * 2, r * 2},
-				{c*2 + 1, r * 2},
-				{c * 2, r*2 + 1},
-				{c*2 + 1, r*2 + 1},
-			}
-
-			var p [4]rgb
-			for i, xy := range coords {
-				sx := bounds.Min.X + (xy[0]*srcW)/pixelW
-				sy := bounds.Min.Y + (xy[1]*srcH)/pixelH
-				p[i] = colorFromRGBA(img.At(sx, sy))
+			// Sample 4 quadrant sub-pixels
+			p := [4]rgb{
+				samplePixel(c*2, r*2),
+				samplePixel(c*2+1, r*2),
+				samplePixel(c*2, r*2+1),
+				samplePixel(c*2+1, r*2+1),
 			}
 
 			maxDist := -1.0
