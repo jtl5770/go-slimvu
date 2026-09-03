@@ -351,7 +351,8 @@ func formatFixedDuration(sec float64, hasHours bool) string {
 
 func (m model) renderTrackInfo(totalWidth int) string {
 	if !m.hasTrack {
-		return ""
+		// Return blank line matching width to freeze vertical UI layout
+		return strings.Repeat(" ", totalWidth)
 	}
 
 	hasHours := m.track.Duration >= 3600 || m.track.Elapsed >= 3600
@@ -489,12 +490,8 @@ func (m model) View() string {
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#4C566A"))
 	footer := helpStyle.Render("Press [q] or [Ctrl+C] to quit")
 
-	var vuContent string
-	if trackLine != "" {
-		vuContent = fmt.Sprintf("%s\n\n%s\n\n%s\n%s\n%s\n\n%s", header, trackLine, leftBar, rightBar, scale, footer)
-	} else {
-		vuContent = fmt.Sprintf("%s\n\n%s\n%s\n%s\n\n%s", header, leftBar, rightBar, scale, footer)
-	}
+	// The track info line slot is unconditionally rendered to prevent any vertical layout jumping
+	vuContent := fmt.Sprintf("%s\n\n%s\n\n%s\n%s\n%s\n\n%s", header, trackLine, leftBar, rightBar, scale, footer)
 
 	var finalView string
 	if m.showCover {

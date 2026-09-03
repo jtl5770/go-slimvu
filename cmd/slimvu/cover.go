@@ -31,10 +31,6 @@ import (
 )
 
 // quadrantRunes maps a 4-bit mask (TL, TR, BL, BR) to the corresponding Unicode block rune.
-// Bit 3 (0x8): Top-Left
-// Bit 2 (0x4): Top-Right
-// Bit 1 (0x2): Bottom-Left
-// Bit 0 (0x1): Bottom-Right
 var quadrantRunes = [16]rune{
 	0:  ' ', // 0000: all background
 	1:  '▗', // 0001: bottom-right
@@ -87,7 +83,6 @@ func colorFromRGBA(c color.Color) rgb {
 }
 
 // renderCoverQuadrant renders an image using 2x2 Unicode quadrant sub-pixels with 24-bit TrueColor.
-// Each character cell represents a 2x2 grid of sub-pixels, yielding 4x higher resolution than single blocks.
 func renderCoverQuadrant(imgData []byte, cols, rows int) ([]string, error) {
 	img, _, err := image.Decode(bytes.NewReader(imgData))
 	if err != nil {
@@ -108,8 +103,6 @@ func renderCoverQuadrant(imgData []byte, cols, rows int) ([]string, error) {
 	for r := 0; r < rows; r++ {
 		var sb strings.Builder
 		for c := 0; c < cols; c++ {
-			// Sample 4 quadrant pixels for this cell:
-			// p[0]: Top-Left, p[1]: Top-Right, p[2]: Bottom-Left, p[3]: Bottom-Right
 			coords := [4][2]int{
 				{c * 2, r * 2},
 				{c*2 + 1, r * 2},
@@ -124,7 +117,6 @@ func renderCoverQuadrant(imgData []byte, cols, rows int) ([]string, error) {
 				p[i] = colorFromRGBA(img.At(sx, sy))
 			}
 
-			// Find two most distant colors among the 4 samples as initial cluster centers
 			maxDist := -1.0
 			c1Idx, c2Idx := 0, 1
 			for i := 0; i < 4; i++ {
@@ -137,7 +129,6 @@ func renderCoverQuadrant(imgData []byte, cols, rows int) ([]string, error) {
 				}
 			}
 
-			// 2-means clustering to partition 4 sub-pixels into Foreground and Background
 			fgCenter := p[c1Idx]
 			bgCenter := p[c2Idx]
 
@@ -186,20 +177,18 @@ func renderCoverQuadrant(imgData []byte, cols, rows int) ([]string, error) {
 	return lines, nil
 }
 
-// renderPlaceholderCover generates a fixed-size 18x9 stylized vinyl disc placeholder.
+// renderPlaceholderCover generates a clean fixed-size 18x9 placeholder with centered "NO COVER".
 func renderPlaceholderCover() []string {
-	discStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#4C566A"))
-	noteStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#81A1C1")).Bold(true)
-	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#3B4252"))
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#4C566A")).Bold(true)
 
 	return []string{
 		"                  ",
-		discStyle.Render("     .------.     "),
-		discStyle.Render("    /   ") + noteStyle.Render("♫") + discStyle.Render("    \\    "),
-		discStyle.Render("   |    ") + noteStyle.Render("◉") + discStyle.Render("     |   "),
-		discStyle.Render("    \\        /    "),
-		discStyle.Render("     '------'     "),
+		"                  ",
+		"                  ",
+		"                  ",
 		labelStyle.Render("     NO COVER     "),
+		"                  ",
+		"                  ",
 		"                  ",
 		"                  ",
 	}
