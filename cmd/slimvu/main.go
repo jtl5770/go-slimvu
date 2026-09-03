@@ -526,7 +526,8 @@ func (m model) View() string {
 	var finalView string
 	if m.showCover {
 		coverBlock := m.renderCoverArt()
-		finalView = lipgloss.JoinHorizontal(lipgloss.Top, coverBlock, vuContent)
+		vuStyled := lipgloss.NewStyle().MarginTop(1).Render(vuContent)
+		finalView = lipgloss.JoinHorizontal(lipgloss.Top, coverBlock, vuStyled)
 	} else {
 		finalView = vuContent
 	}
