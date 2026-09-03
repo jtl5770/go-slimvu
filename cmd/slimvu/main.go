@@ -140,7 +140,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) getBarLength() int {
-	w := m.termWidth - 20
+	w := m.termWidth - 22
 	if w < 20 {
 		w = 20
 	} else if w > 90 {
@@ -242,7 +242,7 @@ func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) st
 	bracketStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#4C566A"))
 	valStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#D8DEE9"))
 
-	return fmt.Sprintf("%s %s%s%s %s",
+	return fmt.Sprintf(" %s  %s%s%s %s",
 		labelStyle.Render(label),
 		bracketStyle.Render("["),
 		sb.String(),
@@ -269,7 +269,7 @@ func (m model) renderScale(barLen int) string {
 	}
 
 	scaleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#4C566A"))
-	indent := strings.Repeat(" ", 4)
+	indent := strings.Repeat(" ", 5) // 1 leading border space + "L  [" (4) = 5
 	return indent + scaleStyle.Render(string(scaleLine))
 }
 
@@ -361,7 +361,7 @@ func (m model) renderTrackInfo(totalWidth int) string {
 	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#ECEFF4")).Bold(true)
 	badgeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#81A1C1"))
 
-	return fmt.Sprintf("%s%s%s%s\n",
+	return fmt.Sprintf(" %s%s%s%s\n",
 		iconStyle.Render(icon),
 		titleStyle.Render(displayTitle),
 		strings.Repeat(" ", spacing),
@@ -372,7 +372,7 @@ func (m model) renderTrackInfo(totalWidth int) string {
 func (m model) View() string {
 	barLen := m.getBarLength()
 	// Total width of the VU visualizer line:
-	// "L" (1) + " " (1) + "[" (1) + barLen + "]" (1) + " " (1) + " -12.4 dB" (9) = barLen + 14
+	// " " (1) + "L" (1) + "  " (2) + "[" (1) + barLen + "]" (1) + " " (1) + " -12.4 dB" (9) = 1 + (barLen + 14)
 	totalWidth := barLen + 14
 
 	titleStyle := lipgloss.NewStyle().
@@ -397,7 +397,7 @@ func (m model) View() string {
 		syncedInfo = fmt.Sprintf("  •  Synced to: %s", syncedStyle.Render(m.syncedMAC))
 	}
 
-	header := titleStyle.Render(fmt.Sprintf("Squeezebox Stereo VU Meter — %s%s", statusStr, syncedInfo))
+	header := titleStyle.Render(fmt.Sprintf(" Squeezebox Stereo VU Meter — %s%s", statusStr, syncedInfo))
 	trackLine := m.renderTrackInfo(totalWidth)
 
 	leftBar := m.renderBar("L", m.leftDB, m.peakLeft, barLen)
@@ -407,7 +407,7 @@ func (m model) View() string {
 	helpStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#4C566A")).
 		MarginTop(1)
-	footer := helpStyle.Render("Press [q] or [Ctrl+C] to quit")
+	footer := helpStyle.Render(" Press [q] or [Ctrl+C] to quit")
 
 	if trackLine != "" {
 		return fmt.Sprintf("\n%s\n%s\n%s\n%s\n%s\n\n%s\n", header, trackLine, leftBar, rightBar, scale, footer)
