@@ -53,9 +53,11 @@ type model struct {
 	peakLeft  peakInfo
 	peakRight peakInfo
 
-	leftDB  float64
-	rightDB float64
-	playing bool
+	leftDB     float64
+	rightDB    float64
+	playing    bool
+	syncedMAC  string
+	syncedName string
 
 	colorGreen  lipgloss.Color
 	colorYellow lipgloss.Color
@@ -119,6 +121,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastUpdate = now
 
 		m.leftDB, m.rightDB, m.playing = m.provider.GetLevels()
+		m.syncedMAC, m.syncedName = m.provider.SyncedWith()
 
 		barLen := m.getBarLength()
 		m.updatePeak(&m.peakLeft, m.leftDB, barLen, dt, now)
@@ -280,7 +283,16 @@ func (m model) View() string {
 		statusStr = statusStyle.Foreground(lipgloss.Color("#4C566A")).Render("■ IDLE")
 	}
 
-	header := titleStyle.Render(fmt.Sprintf("Squeezebox Stereo VU Meter — %s", statusStr))
+	syncedInfo := ""
+	if m.syncedName != "" {
+		syncedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#EBCB8B")).Bold(true)
+		syncedInfo = fmt.Sprintf("  •  Synced to: %s", syncedStyle.Render(m.syncedName))
+	} else if m.syncedMAC != "" {
+		syncedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#EBCB8B")).Bold(true)
+		syncedInfo = fmt.Sprintf("  •  Synced to: %s", syncedStyle.Render(m.syncedMAC))
+	}
+
+	header := titleStyle.Render(fmt.Sprintf("Squeezebox Stereo VU Meter — %s%s", statusStr, syncedInfo))
 
 	leftBar := m.renderBar("L", m.leftDB, m.peakLeft, barLen)
 	rightBar := m.renderBar("R", m.rightDB, m.peakRight, barLen)

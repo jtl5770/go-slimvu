@@ -197,3 +197,11 @@ func (s *SqueezeboxAudioProvider) Stop() error {
 	}
 	return s.proto.Stop()
 }
+
+// SyncedWith returns the MAC address and name of the active LMS player currently synced with.
+func (s *SqueezeboxAudioProvider) SyncedWith() (mac, name string) {
+	if s.autoSync == nil {
+		return "", ""
+	}
+	return s.autoSync.SyncedWith()
+}
