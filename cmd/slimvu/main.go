@@ -273,18 +273,19 @@ func (m model) renderScale(barLen int) string {
 	return indent + scaleStyle.Render(string(scaleLine))
 }
 
-func formatDuration(sec float64) string {
-	if sec <= 0 {
-		return "0:00"
+// formatFixedDuration formats seconds with consistent width based on whether total duration exceeds an hour.
+func formatFixedDuration(sec float64, hasHours bool) string {
+	if sec < 0 {
+		sec = 0
 	}
 	totalSec := int(math.Round(sec))
 	hours := totalSec / 3600
 	mins := (totalSec % 3600) / 60
 	secs := totalSec % 60
-	if hours > 0 {
+	if hasHours {
 		return fmt.Sprintf("%d:%02d:%02d", hours, mins, secs)
 	}
-	return fmt.Sprintf("%d:%02d", mins, secs)
+	return fmt.Sprintf("%02d:%02d", mins, secs)
 }
 
 func (m model) renderTrackInfo(totalWidth int) string {
@@ -292,25 +293,31 @@ func (m model) renderTrackInfo(totalWidth int) string {
 		return ""
 	}
 
-	// 1. Format Right Metadata (Track Count & Time Progress)
-	var timeParts []string
+	// 1. Format Fixed-Width Time Progress
+	hasHours := m.track.Duration >= 3600 || m.track.Elapsed >= 3600
+	var timeParts string
 	if m.track.Duration > 0 {
-		timeParts = append(timeParts, fmt.Sprintf("%s / %s", formatDuration(m.track.Elapsed), formatDuration(m.track.Duration)))
+		timeParts = fmt.Sprintf("%s / %s",
+			formatFixedDuration(m.track.Elapsed, hasHours),
+			formatFixedDuration(m.track.Duration, hasHours),
+		)
 	} else if m.track.Elapsed > 0 {
-		timeParts = append(timeParts, formatDuration(m.track.Elapsed))
+		timeParts = formatFixedDuration(m.track.Elapsed, hasHours)
 	}
 
-	var trackParts []string
+	// 2. Format Fixed-Width Track Progress
+	var trackParts string
 	if m.track.TotalTracks > 0 && m.track.TrackNum > 0 {
-		trackParts = append(trackParts, fmt.Sprintf("[%d/%d]", m.track.TrackNum, m.track.TotalTracks))
+		digits := len(fmt.Sprintf("%d", m.track.TotalTracks))
+		trackParts = fmt.Sprintf("[%*d/%d]", digits, m.track.TrackNum, m.track.TotalTracks)
 	} else if m.track.TrackNum > 0 {
-		trackParts = append(trackParts, fmt.Sprintf("[#%d]", m.track.TrackNum))
+		trackParts = fmt.Sprintf("[#%d]", m.track.TrackNum)
 	}
 
-	rightBadge := strings.TrimSpace(strings.Join(append(trackParts, timeParts...), "  "))
+	rightBadge := strings.TrimSpace(trackParts + "  " + timeParts)
 	rightBadgeLen := len(rightBadge)
 
-	// 2. Format Title & Artist
+	// 3. Format Title & Artist
 	rawTitle := ""
 	if m.track.Artist != "" && m.track.Title != "" {
 		rawTitle = fmt.Sprintf("%s — %s", m.track.Artist, m.track.Title)
@@ -327,11 +334,10 @@ func (m model) renderTrackInfo(totalWidth int) string {
 		availWidth = 10
 	}
 
-	// 3. Handle Long Title (Smooth Marquee or Truncation)
+	// 4. Handle Long Title with Marquee Scroll
 	runes := []rune(rawTitle)
 	displayTitle := rawTitle
 	if len(runes) > availWidth {
-		// Marquee scroll: advance 1 char every 12 ticks (~200ms at 60fps)
 		sep := "   •••   "
 		fullRunes := append(runes, []rune(sep)...)
 		scrollOffset := (m.tickCount / 12) % len(fullRunes)
@@ -344,7 +350,7 @@ func (m model) renderTrackInfo(totalWidth int) string {
 		displayTitle = string(looped)
 	}
 
-	// 4. Fill spacing between left and right
+	// 5. Fixed Right-Flush Spacing
 	displayLen := len([]rune(displayTitle))
 	spacing := totalWidth - (iconLen + displayLen + rightBadgeLen)
 	if spacing < 1 {
@@ -365,8 +371,8 @@ func (m model) renderTrackInfo(totalWidth int) string {
 
 func (m model) View() string {
 	barLen := m.getBarLength()
-	// Total width of the VU visualizer line
-	totalWidth := barLen + 18
+	// Total width of the VU visualizer line: "L  [" (4) + barLen + "] " (2) + "-12.4 dB" (8) + margin = barLen + 15
+	totalWidth := barLen + 15
 
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
@@ -431,7 +437,6 @@ func main() {
 			slog.SetDefault(slog.New(slog.NewTextHandler(f, &slog.HandlerOptions{Level: slog.LevelDebug})))
 		}
 	} else {
-		// Suppress slog messages to terminal to avoid interfering with Bubble Tea TUI
 		slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	}
 
