@@ -2,7 +2,9 @@
 
 High-performance, pure Go virtual Squeezebox / Logitech Media Server (LMS) audio level provider and VU meter engine.
 
-`go-slimvu` emulates a hardware Squeezebox player over the **SlimProto** protocol, decodes incoming audio streams in real time with high-precision sample pacing, and exposes lock-free, zero-allocation left/right stereo RMS decibel levels for LED visualizers, displays, and audio monitors.
+![slimvu TUI](assets/screenshot.png)
+
+`go-slimvu` emulates a hardware Squeezebox player over the **SlimProto** protocol, decodes incoming audio streams in real time with high-precision sample pacing, and exposes lock-free, zero-allocation left/right stereo RMS decibel levels for LED visualizers, displays, terminal visualizers, and audio monitors.
 
 ## Features
 
@@ -18,6 +20,10 @@ High-performance, pure Go virtual Squeezebox / Logitech Media Server (LMS) audio
 - **Zero-Allocation Level Metering**: Lock-free atomic snapshots (`AtomicLevels`) for real-time reads at 30–60+ FPS without garbage collection pressure.
 - **LMS UDP Auto-Discovery**: Automatically locates Logitech Media Server instances on the local network (IPv4 UDP broadcast `e/E` probe).
 - **Intelligent AutoSync**: Automatically queries LMS via JSON-RPC to slave the virtual VU player to any currently playing physical player in the house, following playlist changes and room migrations dynamically.
+- **Rich Terminal UI (`slimvu`)**:
+  - Real-time 60 FPS stereo RMS decibel meter with smooth peak-hold decay.
+  - Full-color album cover art thumbnail rendered via 2×2 Unicode quadrant sub-pixel clustering with terminal cell aspect ratio compensation.
+  - Live metadata tracking (`Artist · Album · Title`, elapsed/total duration, track number) with marquee scrolling.
 
 ## Installation
 
@@ -25,7 +31,43 @@ High-performance, pure Go virtual Squeezebox / Logitech Media Server (LMS) audio
 go get github.com/jtl5770/go-slimvu
 ```
 
-## Quick Start
+To install the `slimvu` TUI binary directly:
+
+```bash
+go install github.com/jtl5770/go-slimvu/cmd/slimvu@latest
+```
+
+## Running the Terminal UI (`slimvu`)
+
+Launch `slimvu` to automatically discover your LMS server, synchronize to the currently playing room, and display the live stereo VU meter with album artwork:
+
+```bash
+slimvu
+```
+
+### CLI Options
+
+```
+Usage of slimvu:
+  -server string
+        LMS server host or IP (leave empty for UDP auto-discovery)
+  -sync
+        Automatically sync to active player (default true)
+  -cover
+        Display album cover art thumbnail (default true)
+  -fps int
+        UI refresh rate in FPS (default 60)
+  -hold int
+        Peak hold time in milliseconds (default 250)
+  -decay float
+        Peak decay rate in blocks/sec (default 20)
+  -min-db float
+        Minimum decibel level for scale (default -60)
+  -max-db float
+        Maximum decibel level for scale (default 0)
+```
+
+## Library Quick Start
 
 ```go
 package main
@@ -56,7 +98,7 @@ func main() {
 	}
 	defer provider.Stop()
 
-	ticker := time.NewTicker(33 * time.Millisecond) // ~30 FPS
+	ticker := time.NewTicker(16 * time.Millisecond) // ~60 FPS
 	defer ticker.Stop()
 
 	for range ticker.C {
