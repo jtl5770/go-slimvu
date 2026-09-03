@@ -38,7 +38,7 @@ func isKittySupported() bool {
 		os.Getenv("WEZTERM_PANE") != ""
 }
 
-// isTerminalGraphicsSupported detects whether the current terminal supports Kitty graphics or TrueColor thumbnails.
+// isTerminalGraphicsSupported detects whether the current terminal supports graphical thumbnails.
 func isTerminalGraphicsSupported() bool {
 	if isKittySupported() ||
 		os.Getenv("COLORTERM") == "truecolor" ||
@@ -48,21 +48,21 @@ func isTerminalGraphicsSupported() bool {
 	return false
 }
 
-// encodeKittyEscape builds the raw Kitty Graphics Protocol escape sequence.
-func encodeKittyEscape(imgData []byte, cols, rows int) (string, error) {
+// transmitKittyImage sends the image data to the terminal's image cache with a given image ID.
+// This is sent ONCE to os.Stdout so BubbleTea's View() renderer never processes the binary payload.
+func transmitKittyImage(imgData []byte, imageID uint32) error {
 	img, _, err := image.Decode(bytes.NewReader(imgData))
 	if err != nil {
-		return "", fmt.Errorf("decode image: %w", err)
+		return fmt.Errorf("decode image: %w", err)
 	}
 
 	var pngBuf bytes.Buffer
 	if err := png.Encode(&pngBuf, img); err != nil {
-		return "", fmt.Errorf("encode png: %w", err)
+		return fmt.Errorf("encode png: %w", err)
 	}
 
 	b64 := base64.StdEncoding.EncodeToString(pngBuf.Bytes())
 
-	var kittyEsc strings.Builder
 	chunkSize := 4096
 	for i := 0; i < len(b64); i += chunkSize {
 		end := i + chunkSize
@@ -73,14 +73,18 @@ func encodeKittyEscape(imgData []byte, cols, rows int) (string, error) {
 		}
 		chunk := b64[i:end]
 		if i == 0 {
-			// Transmit & display immediately at current cursor position, sized to (cols x rows)
-			kittyEsc.WriteString(fmt.Sprintf("\x1b_Ga=T,f=100,t=d,c=%d,r=%d,m=%d;%s\x1b\\", cols, rows, more, chunk))
+			// a=t (transmit & store without immediate placement), i=imageID, f=100 (PNG)
+			_, _ = fmt.Fprintf(os.Stdout, "\x1b_Ga=t,i=%d,f=100,t=d,m=%d;%s\x1b\\", imageID, more, chunk)
 		} else {
-			kittyEsc.WriteString(fmt.Sprintf("\x1b_Gm=%d;%s\x1b\\", more, chunk))
+			_, _ = fmt.Fprintf(os.Stdout, "\x1b_Gm=%d;%s\x1b\\", more, chunk)
 		}
 	}
+	return nil
+}
 
-	return kittyEsc.String(), nil
+// deleteKittyImage deletes an image from Kitty's storage.
+func deleteKittyImage(imageID uint32) {
+	_, _ = fmt.Fprintf(os.Stdout, "\x1b_Ga=d,d=i,i=%d\x1b\\", imageID)
 }
 
 // renderCoverToANSI renders an image into a slice of ANSI truecolor half-block strings.

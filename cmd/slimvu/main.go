@@ -52,6 +52,7 @@ type model struct {
 	holdTime   time.Duration
 	decayRate  float64
 	showCover  bool
+	coverMode  string // "kitty", "ansi", "off"
 	lastUpdate time.Time
 
 	termWidth  int
@@ -68,9 +69,9 @@ type model struct {
 	track      slimvu.TrackInfo
 	hasTrack   bool
 
-	artworkKey  string
-	kittyEscape string
-	coverLines  []string
+	artworkKey string
+	coverLines []string
+	imageID    uint32
 
 	tickCount int
 
@@ -101,7 +102,7 @@ func fetchArtworkCmd(provider *slimvu.SqueezeboxAudioProvider, artworkURL, cover
 	}
 }
 
-func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64, fps int, holdTime time.Duration, decayRate float64, showCover bool) model {
+func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64, fps int, holdTime time.Duration, decayRate float64, showCover bool, coverMode string) model {
 	return model{
 		provider:   provider,
 		minDB:      minDB,
@@ -110,6 +111,7 @@ func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64
 		holdTime:   holdTime,
 		decayRate:  decayRate,
 		showCover:  showCover,
+		coverMode:  coverMode,
 		lastUpdate: time.Now(),
 		leftDB:     minDB,
 		rightDB:    minDB,
@@ -132,6 +134,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "esc", "ctrl+c":
+			if m.imageID > 0 {
+				deleteKittyImage(m.imageID)
+			}
 			return m, tea.Quit
 		}
 
@@ -143,24 +148,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case artworkLoadedMsg:
 		if msg.key == m.artworkKey {
 			if len(msg.data) > 0 {
-				if isKittySupported() {
-					esc, err := encodeKittyEscape(msg.data, 16, 8)
-					if err == nil {
-						m.kittyEscape = esc
-						m.coverLines = nil
-						return m, nil
-					}
-				}
 				lines, err := renderCoverToANSI(msg.data, 16, 8)
 				if err == nil {
-					m.kittyEscape = ""
 					m.coverLines = lines
 				} else {
-					m.kittyEscape = ""
 					m.coverLines = renderPlaceholderCover()
 				}
 			} else {
-				m.kittyEscape = ""
 				m.coverLines = renderPlaceholderCover()
 			}
 		}
@@ -184,7 +178,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			newKey := fmt.Sprintf("%s:%s:%s", m.track.ArtworkURL, m.track.CoverID, m.track.Title)
 			if newKey != m.artworkKey {
 				m.artworkKey = newKey
-				m.kittyEscape = ""
 				if m.track.ArtworkURL != "" || m.track.CoverID != "" {
 					artworkCmd = fetchArtworkCmd(m.provider, m.track.ArtworkURL, m.track.CoverID, newKey)
 				} else {
@@ -193,7 +186,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else if !m.hasTrack {
 			m.artworkKey = ""
-			m.kittyEscape = ""
 			m.coverLines = nil
 		}
 
@@ -444,30 +436,17 @@ func (m model) renderCoverArt() string {
 		return ""
 	}
 
-	var content string
-	if m.kittyEscape != "" {
-		// Provide clean whitespace grid so LipGloss calculates border geometry accurately
-		var sb strings.Builder
-		for r := 0; r < 8; r++ {
-			sb.WriteString(strings.Repeat(" ", 16))
-			if r < 7 {
-				sb.WriteString("\n")
-			}
+	lines := m.coverLines
+	if len(lines) == 0 {
+		lines = renderPlaceholderCover()
+	}
+
+	var sb strings.Builder
+	for i, line := range lines {
+		sb.WriteString(line)
+		if i < len(lines)-1 {
+			sb.WriteString("\n")
 		}
-		content = sb.String()
-	} else {
-		lines := m.coverLines
-		if len(lines) == 0 {
-			lines = renderPlaceholderCover()
-		}
-		var sb strings.Builder
-		for i, line := range lines {
-			sb.WriteString(line)
-			if i < len(lines)-1 {
-				sb.WriteString("\n")
-			}
-		}
-		content = sb.String()
 	}
 
 	borderStyle := lipgloss.NewStyle().
@@ -475,23 +454,7 @@ func (m model) renderCoverArt() string {
 		BorderForeground(lipgloss.Color("#4C566A")).
 		MarginRight(2)
 
-	renderedBox := borderStyle.Render(content)
-
-	// If Kitty Graphics are active, inject the escape sequence into the first cell inside the box
-	if m.kittyEscape != "" {
-		lines := strings.Split(renderedBox, "\n")
-		if len(lines) > 1 {
-			// lines[0] is top border (╭──────╮), lines[1] is first inner row (│      │)
-			// Inject Kitty escape sequence directly after the first border character
-			firstBorderIdx := strings.Index(lines[1], "│")
-			if firstBorderIdx != -1 {
-				lines[1] = lines[1][:firstBorderIdx+len("│")] + m.kittyEscape + lines[1][firstBorderIdx+len("│"):]
-				renderedBox = strings.Join(lines, "\n")
-			}
-		}
-	}
-
-	return renderedBox
+	return borderStyle.Render(sb.String())
 }
 
 func (m model) View() string {
@@ -563,6 +526,7 @@ func main() {
 	holdMS := flag.Int("hold", 250, "Peak hold time in milliseconds")
 	decay := flag.Float64("decay", 20.0, "Peak decay rate (blocks/sec)")
 	cover := flag.Bool("cover", defaultCover, "Display album cover art thumbnail (auto-detected by default)")
+	coverMode := flag.String("cover-mode", "ansi", "Cover art render mode: 'ansi' (truecolor half-blocks), 'kitty' (native kitty protocol), 'off'")
 	logPath := flag.String("log", "", "File path to write debug/info logs (disabled by default)")
 
 	flag.Parse()
@@ -598,7 +562,7 @@ func main() {
 	}
 	defer provider.Stop()
 
-	m := initialModel(provider, *minDB, *maxDB, *fps, time.Duration(*holdMS)*time.Millisecond, *decay, *cover)
+	m := initialModel(provider, *minDB, *maxDB, *fps, time.Duration(*holdMS)*time.Millisecond, *decay, *cover, *coverMode)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

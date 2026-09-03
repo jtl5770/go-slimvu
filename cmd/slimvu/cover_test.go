@@ -22,7 +22,6 @@ import (
 	"image"
 	"image/color"
 	"image/png"
-	"strings"
 	"testing"
 )
 
@@ -36,17 +35,6 @@ func createTestPNG() []byte {
 	var buf bytes.Buffer
 	_ = png.Encode(&buf, img)
 	return buf.Bytes()
-}
-
-func TestEncodeKittyEscape(t *testing.T) {
-	pngData := createTestPNG()
-	esc, err := encodeKittyEscape(pngData, 16, 8)
-	if err != nil {
-		t.Fatalf("encodeKittyEscape error: %v", err)
-	}
-	if !strings.HasPrefix(esc, "\x1b_Ga=T,f=100") {
-		t.Errorf("expected Kitty escape prefix, got: %s", esc[:20])
-	}
 }
 
 func TestRenderCoverToANSI(t *testing.T) {
