@@ -78,4 +78,4 @@ go test -v -race ./...
 
 ## License
 
-GPL-3.0 License.
+LGPL-3.0 License. See [LICENSE](LICENSE) for details.
