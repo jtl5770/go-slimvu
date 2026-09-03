@@ -280,8 +280,6 @@ func (m *model) updatePeak(peak *peakInfo, db float64, barLen int, dt float64, n
 			if peak.position < targetPeak {
 				peak.position = targetPeak
 			}
-			t := (peak.position - 0.5) / float64(barLen)
-			peak.color = getMeterColor(t)
 		}
 	}
 
