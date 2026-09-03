@@ -122,6 +122,10 @@ go-task test
 go test -v -race ./...
 ```
 
+## Acknowledgments
+
+Special thanks to the [**Squeezelite**](https://github.com/ralph-irving/squeezelite) project (by Adrian Smith and Ralph Irving). The SlimProto network state machine, sample pacing calculations, and protocol implementation details in this project were inspired by and modeled after their pioneering C codebase.
+
 ## License
 
 LGPL-3.0 License. See [COPYING.LESSER](COPYING.LESSER) and [COPYING](COPYING) for details.
