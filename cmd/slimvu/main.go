@@ -376,14 +376,17 @@ func (m model) renderTrackInfo(totalWidth int) string {
 	rightBadge := strings.TrimSpace(trackParts + "  " + timeParts)
 	rightBadgeLen := len([]rune(rightBadge))
 
-	rawTitle := ""
-	if m.track.Artist != "" && m.track.Title != "" {
-		rawTitle = fmt.Sprintf("%s — %s", m.track.Artist, m.track.Title)
-	} else if m.track.Title != "" {
-		rawTitle = m.track.Title
-	} else {
-		rawTitle = m.track.Artist
+	var titleParts []string
+	if m.track.Artist != "" {
+		titleParts = append(titleParts, m.track.Artist)
 	}
+	if m.track.Album != "" {
+		titleParts = append(titleParts, m.track.Album)
+	}
+	if m.track.Title != "" {
+		titleParts = append(titleParts, m.track.Title)
+	}
+	rawTitle := strings.Join(titleParts, " · ")
 
 	icon := "♫ "
 	iconLen := 2
