@@ -57,6 +57,7 @@ type LMSClientInterface interface {
 	SyncPlayer(ctx context.Context, ourMAC, targetMAC string) error
 	UnsyncPlayer(ctx context.Context, ourMAC string) error
 	SetPlayerPref(ctx context.Context, playerMAC, pref, value string) error
+	GetArtwork(ctx context.Context, artworkURL, coverID, playerMAC string) ([]byte, error)
 }
 
 // NewAutoSyncManager creates a new AutoSyncManager.
@@ -111,6 +112,14 @@ func (m *AutoSyncManager) SyncedTrack() (TrackInfo, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.track, m.hasTrack
+}
+
+// GetArtwork fetches the artwork image bytes from LMS.
+func (m *AutoSyncManager) GetArtwork(ctx context.Context, artworkURL, coverID string) ([]byte, error) {
+	m.mu.Lock()
+	synced := m.syncedWith
+	m.mu.Unlock()
+	return m.client.GetArtwork(ctx, artworkURL, coverID, synced)
 }
 
 func (m *AutoSyncManager) isIgnored(p PlayerInfo) bool {

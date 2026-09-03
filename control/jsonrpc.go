@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -61,6 +62,8 @@ type PlaylistTrack struct {
 	Duration    interface{} `json:"duration"`
 	TrackNum    interface{} `json:"tracknum"`
 	RemoteTitle string      `json:"remote_title"`
+	ArtworkURL  string      `json:"artwork_url"`
+	CoverID     string      `json:"coverid"`
 }
 
 // TrackInfo holds parsed, clean track metadata for display.
@@ -73,6 +76,8 @@ type TrackInfo struct {
 	Elapsed      float64 `json:"elapsed"`
 	Duration     float64 `json:"duration"`
 	IsLiveStream bool    `json:"is_live_stream"`
+	ArtworkURL   string  `json:"artwork_url"`
+	CoverID      string  `json:"coverid"`
 }
 
 // PlayerStatus holds the playback state and metadata of a player.
@@ -90,6 +95,8 @@ type PlayerStatus struct {
 	PlaylistTracks   interface{}     `json:"playlist_tracks"`
 	RemoteTitle      string          `json:"remote_title"`
 	CurrentTitle     string          `json:"current_title"`
+	ArtworkURL       string          `json:"artwork_url"`
+	CoverID          string          `json:"coverid"`
 	PlaylistLoop     []PlaylistTrack `json:"playlist_loop"`
 }
 
@@ -139,6 +146,8 @@ func (s *PlayerStatus) GetTrackInfo() TrackInfo {
 		Elapsed:     toFloat(s.Time),
 		Duration:    toFloat(s.Duration),
 		TotalTracks: toInt(s.PlaylistTracks),
+		ArtworkURL:  s.ArtworkURL,
+		CoverID:     s.CoverID,
 	}
 
 	if s.PlaylistCurIndex != nil {
@@ -155,6 +164,12 @@ func (s *PlayerStatus) GetTrackInfo() TrackInfo {
 		}
 		if info.TrackNum <= 0 && track.TrackNum != nil {
 			info.TrackNum = toInt(track.TrackNum)
+		}
+		if info.ArtworkURL == "" {
+			info.ArtworkURL = track.ArtworkURL
+		}
+		if info.CoverID == "" {
+			info.CoverID = track.CoverID
 		}
 	}
 
@@ -175,6 +190,8 @@ func (s *PlayerStatus) GetTrackInfo() TrackInfo {
 
 // LMSClient provides methods to query and control LMS via JSON-RPC.
 type LMSClient struct {
+	host       string
+	port       int
 	endpoint   string
 	httpClient *http.Client
 }
@@ -185,6 +202,8 @@ func NewLMSClient(host string, port int) *LMSClient {
 		port = 9000
 	}
 	return &LMSClient{
+		host:     host,
+		port:     port,
 		endpoint: fmt.Sprintf("http://%s:%d/jsonrpc.js", host, port),
 		httpClient: &http.Client{
 			Timeout: 5 * time.Second,
@@ -263,8 +282,8 @@ func (c *LMSClient) GetPlayers(ctx context.Context) ([]PlayerInfo, error) {
 // GetPlayerStatus gets the current status ("play", "pause", "stop") and track info of a player by MAC.
 func (c *LMSClient) GetPlayerStatus(ctx context.Context, playerMAC string) (*PlayerStatus, error) {
 	var result PlayerStatus
-	// tags: a (artist), c (cover), d (duration), t (tracknum), u (url/stream), y (year), l (album)
-	cmd := []interface{}{"status", "-", 1, "tags:acdtuyl"}
+	// tags: a (artist), c (cover), d (duration), t (tracknum), u (url/stream), y (year), l (album), J (artwork_url)
+	cmd := []interface{}{"status", "-", 1, "tags:acdtuylJ"}
 	if err := c.call(ctx, playerMAC, cmd, &result); err != nil {
 		return nil, err
 	}
@@ -274,9 +293,40 @@ func (c *LMSClient) GetPlayerStatus(ctx context.Context, playerMAC string) (*Pla
 	return &result, nil
 }
 
+// GetArtwork fetches the image bytes for a cover or artwork URL from LMS.
+func (c *LMSClient) GetArtwork(ctx context.Context, artworkURL, coverID, playerMAC string) ([]byte, error) {
+	targetURL := ""
+	if strings.HasPrefix(artworkURL, "http://") || strings.HasPrefix(artworkURL, "https://") {
+		targetURL = artworkURL
+	} else if strings.HasPrefix(artworkURL, "/") {
+		targetURL = fmt.Sprintf("http://%s:%d%s", c.host, c.port, artworkURL)
+	} else if coverID != "" {
+		targetURL = fmt.Sprintf("http://%s:%d/music/%s/cover.jpg", c.host, c.port, coverID)
+	} else if playerMAC != "" {
+		targetURL = fmt.Sprintf("http://%s:%d/music/current/cover.jpg?player=%s", c.host, c.port, playerMAC)
+	} else {
+		return nil, fmt.Errorf("no artwork or cover id provided")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("artwork fetch HTTP %d", resp.StatusCode)
+	}
+
+	return io.ReadAll(resp.Body)
+}
+
 // SyncPlayer synchronizes our player (ourMAC, the slave) with a master player (targetMAC).
-// In LMS JSON-RPC, the active master must be the target player in the request,
-// with the slave (ourMAC) passed as the parameter: targetMAC ["sync", ourMAC].
 func (c *LMSClient) SyncPlayer(ctx context.Context, ourMAC, targetMAC string) error {
 	cmd := []interface{}{"sync", ourMAC}
 	return c.call(ctx, targetMAC, cmd, nil)

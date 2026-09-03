@@ -216,3 +216,11 @@ func (s *SqueezeboxAudioProvider) GetTrackInfo() (TrackInfo, bool) {
 	}
 	return s.autoSync.SyncedTrack()
 }
+
+// GetArtwork fetches the image bytes for a track artwork URL or current player cover.
+func (s *SqueezeboxAudioProvider) GetArtwork(ctx context.Context, artworkURL, coverID string) ([]byte, error) {
+	if s.autoSync == nil {
+		return nil, fmt.Errorf("autosync not enabled")
+	}
+	return s.autoSync.GetArtwork(ctx, artworkURL, coverID)
+}
