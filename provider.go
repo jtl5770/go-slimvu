@@ -205,3 +205,14 @@ func (s *SqueezeboxAudioProvider) SyncedWith() (mac, name string) {
 	}
 	return s.autoSync.SyncedWith()
 }
+
+// TrackInfo is an alias for control.TrackInfo.
+type TrackInfo = control.TrackInfo
+
+// GetTrackInfo returns the current TrackInfo of the active synchronized player, if available.
+func (s *SqueezeboxAudioProvider) GetTrackInfo() (TrackInfo, bool) {
+	if s.autoSync == nil {
+		return TrackInfo{}, false
+	}
+	return s.autoSync.SyncedTrack()
+}

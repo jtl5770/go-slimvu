@@ -44,8 +44,10 @@ type AutoSyncManager struct {
 	wg     sync.WaitGroup
 
 	mu         sync.Mutex
-	syncedWith string // Currently synced player MAC
-	syncedName string // Currently synced player Name
+	syncedWith string    // Currently synced player MAC
+	syncedName string    // Currently synced player Name
+	track      TrackInfo // Currently playing track info
+	hasTrack   bool
 }
 
 // LMSClientInterface defines the subset of LMSClient methods used by AutoSyncManager.
@@ -90,6 +92,8 @@ func (m *AutoSyncManager) Stop() {
 	m.mu.Lock()
 	m.syncedWith = ""
 	m.syncedName = ""
+	m.track = TrackInfo{}
+	m.hasTrack = false
 	m.mu.Unlock()
 
 	slog.Info("AutoSyncManager stopped and cleanly unsynced from LMS")
@@ -100,6 +104,13 @@ func (m *AutoSyncManager) SyncedWith() (mac, name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.syncedWith, m.syncedName
+}
+
+// SyncedTrack returns the TrackInfo of the active synchronized player.
+func (m *AutoSyncManager) SyncedTrack() (TrackInfo, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.track, m.hasTrack
 }
 
 func (m *AutoSyncManager) isIgnored(p PlayerInfo) bool {
@@ -120,8 +131,6 @@ func (m *AutoSyncManager) monitorLoop() {
 	ticker := time.NewTicker(m.cfg.PollInterval)
 	defer ticker.Stop()
 
-	// Configure our player preferences on LMS so LMS knows GoLEDs is a passive visualizer:
-	// maintainSync=0 tells LMS StreamingController::_CheckSync to NEVER enforce sync or adjust master playback for us.
 	initCtx, initCancel := context.WithTimeout(m.ctx, 3*time.Second)
 	_ = m.client.SetPlayerPref(initCtx, m.cfg.OurMAC, "maintainSync", "0")
 	_ = m.client.SetPlayerPref(initCtx, m.cfg.OurMAC, "minSyncAdjust", "5000")
@@ -158,12 +167,13 @@ func (m *AutoSyncManager) evaluatePlayers() {
 		status, err := m.client.GetPlayerStatus(ctx, currentMaster)
 		if err == nil && status != nil {
 			if status.Mode == "play" {
-				// Sticky lock: Current synced master is actively playing music
 				m.mu.Lock()
 				m.syncedWith = currentMaster
 				if status.Name != "" {
 					m.syncedName = status.Name
 				}
+				m.track = status.GetTrackInfo()
+				m.hasTrack = (m.track.Title != "" || m.track.Artist != "")
 				m.mu.Unlock()
 				return
 			}
@@ -181,6 +191,7 @@ func (m *AutoSyncManager) evaluatePlayers() {
 	type activeCandidate struct {
 		player    PlayerInfo
 		masterMAC string
+		status    *PlayerStatus
 	}
 	var activeCandidates []activeCandidate
 
@@ -200,17 +211,18 @@ func (m *AutoSyncManager) evaluatePlayers() {
 			activeCandidates = append(activeCandidates, activeCandidate{
 				player:    p,
 				masterMAC: targetMaster,
+				status:    status,
 			})
 		}
 	}
 
 	if len(activeCandidates) == 0 {
-		// No players are actively playing
 		if currentMaster != "" {
-			// If our current master was stopped/powered off, cleanly unsync
 			m.mu.Lock()
 			m.syncedWith = ""
 			m.syncedName = ""
+			m.track = TrackInfo{}
+			m.hasTrack = false
 			m.mu.Unlock()
 		}
 		return
@@ -221,11 +233,12 @@ func (m *AutoSyncManager) evaluatePlayers() {
 	targetMAC := selected.masterMAC
 	targetName := selected.player.Name
 
-	// If already synced to this target, nothing to do
 	if strings.EqualFold(currentMaster, targetMAC) {
 		m.mu.Lock()
 		m.syncedWith = targetMAC
 		m.syncedName = targetName
+		m.track = selected.status.GetTrackInfo()
+		m.hasTrack = (m.track.Title != "" || m.track.Artist != "")
 		m.mu.Unlock()
 		return
 	}
@@ -237,12 +250,13 @@ func (m *AutoSyncManager) evaluatePlayers() {
 		return
 	}
 
-	// Ensure maintainSync=0 is asserted after joining the sync group
 	_ = m.client.SetPlayerPref(ctx, m.cfg.OurMAC, "maintainSync", "0")
 	_ = m.client.SetPlayerPref(ctx, m.cfg.OurMAC, "minSyncAdjust", "5000")
 
 	m.mu.Lock()
 	m.syncedWith = targetMAC
 	m.syncedName = targetName
+	m.track = selected.status.GetTrackInfo()
+	m.hasTrack = (m.track.Title != "" || m.track.Artist != "")
 	m.mu.Unlock()
 }

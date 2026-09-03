@@ -58,6 +58,10 @@ type model struct {
 	playing    bool
 	syncedMAC  string
 	syncedName string
+	track      slimvu.TrackInfo
+	hasTrack   bool
+
+	tickCount int
 
 	colorGreen  lipgloss.Color
 	colorYellow lipgloss.Color
@@ -113,6 +117,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
+		m.tickCount++
 		now := time.Time(msg)
 		dt := now.Sub(m.lastUpdate).Seconds()
 		if dt <= 0 || dt > 1.0 {
@@ -122,6 +127,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.leftDB, m.rightDB, m.playing = m.provider.GetLevels()
 		m.syncedMAC, m.syncedName = m.provider.SyncedWith()
+		m.track, m.hasTrack = m.provider.GetTrackInfo()
 
 		barLen := m.getBarLength()
 		m.updatePeak(&m.peakLeft, m.leftDB, barLen, dt, now)
@@ -267,8 +273,100 @@ func (m model) renderScale(barLen int) string {
 	return indent + scaleStyle.Render(string(scaleLine))
 }
 
+func formatDuration(sec float64) string {
+	if sec <= 0 {
+		return "0:00"
+	}
+	totalSec := int(math.Round(sec))
+	hours := totalSec / 3600
+	mins := (totalSec % 3600) / 60
+	secs := totalSec % 60
+	if hours > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", hours, mins, secs)
+	}
+	return fmt.Sprintf("%d:%02d", mins, secs)
+}
+
+func (m model) renderTrackInfo(totalWidth int) string {
+	if !m.hasTrack {
+		return ""
+	}
+
+	// 1. Format Right Metadata (Track Count & Time Progress)
+	var timeParts []string
+	if m.track.Duration > 0 {
+		timeParts = append(timeParts, fmt.Sprintf("%s / %s", formatDuration(m.track.Elapsed), formatDuration(m.track.Duration)))
+	} else if m.track.Elapsed > 0 {
+		timeParts = append(timeParts, formatDuration(m.track.Elapsed))
+	}
+
+	var trackParts []string
+	if m.track.TotalTracks > 0 && m.track.TrackNum > 0 {
+		trackParts = append(trackParts, fmt.Sprintf("[%d/%d]", m.track.TrackNum, m.track.TotalTracks))
+	} else if m.track.TrackNum > 0 {
+		trackParts = append(trackParts, fmt.Sprintf("[#%d]", m.track.TrackNum))
+	}
+
+	rightBadge := strings.TrimSpace(strings.Join(append(trackParts, timeParts...), "  "))
+	rightBadgeLen := len(rightBadge)
+
+	// 2. Format Title & Artist
+	rawTitle := ""
+	if m.track.Artist != "" && m.track.Title != "" {
+		rawTitle = fmt.Sprintf("%s — %s", m.track.Artist, m.track.Title)
+	} else if m.track.Title != "" {
+		rawTitle = m.track.Title
+	} else {
+		rawTitle = m.track.Artist
+	}
+
+	icon := "♫ "
+	iconLen := 2
+	availWidth := totalWidth - rightBadgeLen - iconLen - 2
+	if availWidth < 10 {
+		availWidth = 10
+	}
+
+	// 3. Handle Long Title (Smooth Marquee or Truncation)
+	runes := []rune(rawTitle)
+	displayTitle := rawTitle
+	if len(runes) > availWidth {
+		// Marquee scroll: advance 1 char every 12 ticks (~200ms at 60fps)
+		sep := "   •••   "
+		fullRunes := append(runes, []rune(sep)...)
+		scrollOffset := (m.tickCount / 12) % len(fullRunes)
+
+		var looped []rune
+		for i := 0; i < availWidth; i++ {
+			idx := (scrollOffset + i) % len(fullRunes)
+			looped = append(looped, fullRunes[idx])
+		}
+		displayTitle = string(looped)
+	}
+
+	// 4. Fill spacing between left and right
+	displayLen := len([]rune(displayTitle))
+	spacing := totalWidth - (iconLen + displayLen + rightBadgeLen)
+	if spacing < 1 {
+		spacing = 1
+	}
+
+	iconStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#88C0D0"))
+	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#ECEFF4")).Bold(true)
+	badgeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#81A1C1"))
+
+	return fmt.Sprintf("%s%s%s%s\n",
+		iconStyle.Render(icon),
+		titleStyle.Render(displayTitle),
+		strings.Repeat(" ", spacing),
+		badgeStyle.Render(rightBadge),
+	)
+}
+
 func (m model) View() string {
 	barLen := m.getBarLength()
+	// Total width of the VU visualizer line
+	totalWidth := barLen + 18
 
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
@@ -293,6 +391,7 @@ func (m model) View() string {
 	}
 
 	header := titleStyle.Render(fmt.Sprintf("Squeezebox Stereo VU Meter — %s%s", statusStr, syncedInfo))
+	trackLine := m.renderTrackInfo(totalWidth)
 
 	leftBar := m.renderBar("L", m.leftDB, m.peakLeft, barLen)
 	rightBar := m.renderBar("R", m.rightDB, m.peakRight, barLen)
@@ -303,6 +402,9 @@ func (m model) View() string {
 		MarginTop(1)
 	footer := helpStyle.Render("Press [q] or [Ctrl+C] to quit")
 
+	if trackLine != "" {
+		return fmt.Sprintf("\n%s\n%s\n%s\n%s\n%s\n\n%s\n", header, trackLine, leftBar, rightBar, scale, footer)
+	}
 	return fmt.Sprintf("\n%s\n\n%s\n%s\n%s\n\n%s\n", header, leftBar, rightBar, scale, footer)
 }
 

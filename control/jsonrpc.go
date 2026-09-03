@@ -53,17 +53,124 @@ type PlayerInfo struct {
 	Power     int    `json:"power"`
 }
 
-// PlayerStatus holds the playback state of a player.
+// PlaylistTrack represents track details inside the playlist_loop.
+type PlaylistTrack struct {
+	Title       string      `json:"title"`
+	Artist      string      `json:"artist"`
+	Album       string      `json:"album"`
+	Duration    interface{} `json:"duration"`
+	TrackNum    interface{} `json:"tracknum"`
+	RemoteTitle string      `json:"remote_title"`
+}
+
+// TrackInfo holds parsed, clean track metadata for display.
+type TrackInfo struct {
+	Title        string  `json:"title"`
+	Artist       string  `json:"artist"`
+	Album        string  `json:"album"`
+	TrackNum     int     `json:"track_num"`
+	TotalTracks  int     `json:"total_tracks"`
+	Elapsed      float64 `json:"elapsed"`
+	Duration     float64 `json:"duration"`
+	IsLiveStream bool    `json:"is_live_stream"`
+}
+
+// PlayerStatus holds the playback state and metadata of a player.
 type PlayerStatus struct {
-	PlayerID   string  `json:"playerid"`
-	Name       string  `json:"player_name"`
-	Mode       string  `json:"mode"`        // "play", "pause", "stop"
-	Power      int     `json:"power"`       // 1 = on, 0 = off
-	Connected  int     `json:"player_connected"`
-	SyncMaster string  `json:"sync_master"` // Master MAC if synced as slave
-	SyncSlaves string  `json:"sync_slaves"` // Comma-separated slave MACs if master
-	Time       float64 `json:"time"`        // Current track playback position in seconds
-	Duration   float64 `json:"duration"`    // Track duration in seconds
+	PlayerID         string          `json:"playerid"`
+	Name             string          `json:"player_name"`
+	Mode             string          `json:"mode"`        // "play", "pause", "stop"
+	Power            int             `json:"power"`       // 1 = on, 0 = off
+	Connected        int             `json:"player_connected"`
+	SyncMaster       string          `json:"sync_master"` // Master MAC if synced as slave
+	SyncSlaves       string          `json:"sync_slaves"` // Comma-separated slave MACs if master
+	Time             interface{}     `json:"time"`        // Current track playback position in seconds
+	Duration         interface{}     `json:"duration"`    // Track duration in seconds
+	PlaylistCurIndex interface{}     `json:"playlist_cur_index"`
+	PlaylistTracks   interface{}     `json:"playlist_tracks"`
+	RemoteTitle      string          `json:"remote_title"`
+	CurrentTitle     string          `json:"current_title"`
+	PlaylistLoop     []PlaylistTrack `json:"playlist_loop"`
+}
+
+func toFloat(v interface{}) float64 {
+	switch val := v.(type) {
+	case float64:
+		return val
+	case float32:
+		return float64(val)
+	case int:
+		return float64(val)
+	case int64:
+		return float64(val)
+	case string:
+		var f float64
+		fmt.Sscanf(val, "%f", &f)
+		return f
+	case json.Number:
+		f, _ := val.Float64()
+		return f
+	}
+	return 0
+}
+
+func toInt(v interface{}) int {
+	switch val := v.(type) {
+	case int:
+		return val
+	case int64:
+		return int(val)
+	case float64:
+		return int(val)
+	case string:
+		var i int
+		fmt.Sscanf(val, "%d", &i)
+		return i
+	case json.Number:
+		i, _ := val.Int64()
+		return int(i)
+	}
+	return 0
+}
+
+// GetTrackInfo extracts and normalizes the current track metadata from PlayerStatus.
+func (s *PlayerStatus) GetTrackInfo() TrackInfo {
+	info := TrackInfo{
+		Elapsed:     toFloat(s.Time),
+		Duration:    toFloat(s.Duration),
+		TotalTracks: toInt(s.PlaylistTracks),
+	}
+
+	if s.PlaylistCurIndex != nil {
+		info.TrackNum = toInt(s.PlaylistCurIndex) + 1
+	}
+
+	if len(s.PlaylistLoop) > 0 {
+		track := s.PlaylistLoop[0]
+		info.Title = track.Title
+		info.Artist = track.Artist
+		info.Album = track.Album
+		if info.Duration <= 0 {
+			info.Duration = toFloat(track.Duration)
+		}
+		if info.TrackNum <= 0 && track.TrackNum != nil {
+			info.TrackNum = toInt(track.TrackNum)
+		}
+	}
+
+	if info.Title == "" {
+		if s.CurrentTitle != "" {
+			info.Title = s.CurrentTitle
+		} else if s.RemoteTitle != "" {
+			info.Title = s.RemoteTitle
+		}
+	}
+
+	if info.Duration <= 0 && (s.RemoteTitle != "" || s.CurrentTitle != "") {
+		info.IsLiveStream = true
+	}
+
+	return info
 }
 
 // LMSClient provides methods to query and control LMS via JSON-RPC.
@@ -153,10 +260,11 @@ func (c *LMSClient) GetPlayers(ctx context.Context) ([]PlayerInfo, error) {
 	return result.PlayersLoop, nil
 }
 
-// GetPlayerStatus gets the current status ("play", "pause", "stop") of a player by MAC.
+// GetPlayerStatus gets the current status ("play", "pause", "stop") and track info of a player by MAC.
 func (c *LMSClient) GetPlayerStatus(ctx context.Context, playerMAC string) (*PlayerStatus, error) {
 	var result PlayerStatus
-	cmd := []interface{}{"status", "-", 1, "tags:uB"}
+	// tags: a (artist), c (cover), d (duration), t (tracknum), u (url/stream), y (year), l (album)
+	cmd := []interface{}{"status", "-", 1, "tags:acdtuyl"}
 	if err := c.call(ctx, playerMAC, cmd, &result); err != nil {
 		return nil, err
 	}
