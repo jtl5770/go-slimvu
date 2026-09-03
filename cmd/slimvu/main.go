@@ -20,6 +20,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
+	"log/slog"
 	"math"
 	"os"
 	"strings"
@@ -129,7 +131,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) getBarLength() int {
-	// Available width for bar: total width minus label ("L  [") + "] -12.4 dB" (~18 chars)
 	w := m.termWidth - 20
 	if w < 20 {
 		w = 20
@@ -156,7 +157,6 @@ func (m *model) updatePeak(peak *peakInfo, db float64, barLen int, dt float64, n
 		peak.position = targetPeak
 		peak.holdUntil = now.Add(m.holdTime)
 
-		// Set color from highest zone reached
 		idx := int(math.Round(targetPeak)) - 1
 		if idx < greenEnd {
 			peak.color = m.colorGreen
@@ -166,7 +166,6 @@ func (m *model) updatePeak(peak *peakInfo, db float64, barLen int, dt float64, n
 			peak.color = m.colorRed
 		}
 	} else {
-		// Falloff decay after hold duration, keeping the previously assigned color
 		if now.After(peak.holdUntil) && dt > 0 {
 			peak.position -= m.decayRate * dt
 			if peak.position < targetPeak {
@@ -200,7 +199,6 @@ func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) st
 
 	var sb strings.Builder
 	for i := 0; i < barLen; i++ {
-		// If this is the peak position and peak is above current active block, draw peak
 		if i == peakIdx && i >= activeBlocks {
 			peakStyle := lipgloss.NewStyle().Foreground(peak.color).Bold(true)
 			sb.WriteString(peakStyle.Render("█"))
@@ -308,8 +306,20 @@ func main() {
 	fps := flag.Int("fps", 60, "UI refresh rate (FPS)")
 	holdMS := flag.Int("hold", 250, "Peak hold time in milliseconds")
 	decay := flag.Float64("decay", 20.0, "Peak decay rate (blocks/sec)")
+	logPath := flag.String("log", "", "File path to write debug/info logs (disabled by default)")
 
 	flag.Parse()
+
+	if *logPath != "" {
+		f, err := os.OpenFile(*logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			defer f.Close()
+			slog.SetDefault(slog.New(slog.NewTextHandler(f, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		}
+	} else {
+		// Suppress slog messages to terminal to avoid interfering with Bubble Tea TUI
+		slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}
 
 	cfg := slimvu.Config{
 		Server:        *server,
