@@ -52,7 +52,6 @@ type model struct {
 	holdTime   time.Duration
 	decayRate  float64
 	showCover  bool
-	coverMode  string // "kitty", "ansi", "off"
 	lastUpdate time.Time
 
 	termWidth  int
@@ -71,7 +70,6 @@ type model struct {
 
 	artworkKey string
 	coverLines []string
-	imageID    uint32
 
 	tickCount int
 
@@ -102,7 +100,7 @@ func fetchArtworkCmd(provider *slimvu.SqueezeboxAudioProvider, artworkURL, cover
 	}
 }
 
-func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64, fps int, holdTime time.Duration, decayRate float64, showCover bool, coverMode string) model {
+func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64, fps int, holdTime time.Duration, decayRate float64, showCover bool) model {
 	return model{
 		provider:   provider,
 		minDB:      minDB,
@@ -111,7 +109,6 @@ func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64
 		holdTime:   holdTime,
 		decayRate:  decayRate,
 		showCover:  showCover,
-		coverMode:  coverMode,
 		lastUpdate: time.Now(),
 		leftDB:     minDB,
 		rightDB:    minDB,
@@ -134,9 +131,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "esc", "ctrl+c":
-			if m.imageID > 0 {
-				deleteKittyImage(m.imageID)
-			}
 			return m, tea.Quit
 		}
 
@@ -148,7 +142,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case artworkLoadedMsg:
 		if msg.key == m.artworkKey {
 			if len(msg.data) > 0 {
-				lines, err := renderCoverToANSI(msg.data, 16, 8)
+				lines, err := renderCoverQuadrant(msg.data, 18, 9)
 				if err == nil {
 					m.coverLines = lines
 				} else {
@@ -205,7 +199,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) getBarLength() int {
 	offset := 22
 	if m.showCover {
-		offset += 20 // Fixed width reservation for cover / placeholder frame
+		offset += 22 // Fixed width reservation for 18-column cover box
 	}
 
 	w := m.termWidth - offset
@@ -526,7 +520,6 @@ func main() {
 	holdMS := flag.Int("hold", 250, "Peak hold time in milliseconds")
 	decay := flag.Float64("decay", 20.0, "Peak decay rate (blocks/sec)")
 	cover := flag.Bool("cover", defaultCover, "Display album cover art thumbnail (auto-detected by default)")
-	coverMode := flag.String("cover-mode", "ansi", "Cover art render mode: 'ansi' (truecolor half-blocks), 'kitty' (native kitty protocol), 'off'")
 	logPath := flag.String("log", "", "File path to write debug/info logs (disabled by default)")
 
 	flag.Parse()
@@ -562,7 +555,7 @@ func main() {
 	}
 	defer provider.Stop()
 
-	m := initialModel(provider, *minDB, *maxDB, *fps, time.Duration(*holdMS)*time.Millisecond, *decay, *cover, *coverMode)
+	m := initialModel(provider, *minDB, *maxDB, *fps, time.Duration(*holdMS)*time.Millisecond, *decay, *cover)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

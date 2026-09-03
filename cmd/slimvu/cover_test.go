@@ -26,9 +26,9 @@ import (
 )
 
 func createTestPNG() []byte {
-	img := image.NewRGBA(image.Rect(0, 0, 16, 16))
-	for y := 0; y < 16; y++ {
-		for x := 0; x < 16; x++ {
+	img := image.NewRGBA(image.Rect(0, 0, 36, 18))
+	for y := 0; y < 18; y++ {
+		for x := 0; x < 36; x++ {
 			img.Set(x, y, color.RGBA{R: 200, G: 50, B: 100, A: 255})
 		}
 	}
@@ -37,20 +37,20 @@ func createTestPNG() []byte {
 	return buf.Bytes()
 }
 
-func TestRenderCoverToANSI(t *testing.T) {
+func TestRenderCoverQuadrant(t *testing.T) {
 	pngData := createTestPNG()
-	lines, err := renderCoverToANSI(pngData, 16, 8)
+	lines, err := renderCoverQuadrant(pngData, 18, 9)
 	if err != nil {
-		t.Fatalf("renderCoverToANSI error: %v", err)
+		t.Fatalf("renderCoverQuadrant error: %v", err)
 	}
-	if len(lines) != 8 {
-		t.Errorf("expected 8 lines, got %d", len(lines))
+	if len(lines) != 9 {
+		t.Errorf("expected 9 lines, got %d", len(lines))
 	}
 }
 
 func TestRenderPlaceholderCover(t *testing.T) {
 	lines := renderPlaceholderCover()
-	if len(lines) != 8 {
-		t.Errorf("expected 8 placeholder lines, got %d", len(lines))
+	if len(lines) != 9 {
+		t.Errorf("expected 9 placeholder lines, got %d", len(lines))
 	}
 }

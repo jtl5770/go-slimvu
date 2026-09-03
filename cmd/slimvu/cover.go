@@ -19,28 +19,46 @@ package main
 
 import (
 	"bytes"
-	"encoding/base64"
 	"fmt"
 	"image"
+	"image/color"
 	_ "image/jpeg"
-	"image/png"
+	_ "image/png"
 	"os"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
-// isKittySupported checks if the host terminal natively supports the Kitty Graphics Protocol.
-func isKittySupported() bool {
-	return os.Getenv("KITTY_WINDOW_ID") != "" ||
-		strings.Contains(strings.ToLower(os.Getenv("TERM")), "kitty") ||
-		os.Getenv("GHOSTTY_RESOURCES_DIR") != "" ||
-		os.Getenv("WEZTERM_PANE") != ""
+// quadrantRunes maps a 4-bit mask (TL, TR, BL, BR) to the corresponding Unicode block rune.
+// Bit 3 (0x8): Top-Left
+// Bit 2 (0x4): Top-Right
+// Bit 1 (0x2): Bottom-Left
+// Bit 0 (0x1): Bottom-Right
+var quadrantRunes = [16]rune{
+	0:  ' ', // 0000: all background
+	1:  '▗', // 0001: bottom-right
+	2:  '▖', // 0010: bottom-left
+	3:  '▄', // 0011: bottom half
+	4:  '▝', // 0100: top-right
+	5:  '▐', // 0101: right half
+	6:  '▞', // 0110: diagonal TR + BL
+	7:  '▟', // 0111: TR + BL + BR
+	8:  '▘', // 1000: top-left
+	9:  '▚', // 1001: diagonal TL + BR
+	10: '▌', // 1010: left half
+	11: '▙', // 1011: TL + BL + BR
+	12: '▀', // 1100: top half
+	13: '▜', // 1101: TL + TR + BR
+	14: '▛', // 1110: TL + TR + BL
+	15: '█', // 1111: all foreground
 }
 
-// isTerminalGraphicsSupported detects whether the current terminal supports graphical thumbnails.
 func isTerminalGraphicsSupported() bool {
-	if isKittySupported() ||
+	if os.Getenv("KITTY_WINDOW_ID") != "" ||
+		strings.Contains(strings.ToLower(os.Getenv("TERM")), "kitty") ||
+		os.Getenv("GHOSTTY_RESOURCES_DIR") != "" ||
+		os.Getenv("WEZTERM_PANE") != "" ||
 		os.Getenv("COLORTERM") == "truecolor" ||
 		os.Getenv("COLORTERM") == "24bit" {
 		return true
@@ -48,47 +66,29 @@ func isTerminalGraphicsSupported() bool {
 	return false
 }
 
-// transmitKittyImage sends the image data to the terminal's image cache with a given image ID.
-// This is sent ONCE to os.Stdout so BubbleTea's View() renderer never processes the binary payload.
-func transmitKittyImage(imgData []byte, imageID uint32) error {
-	img, _, err := image.Decode(bytes.NewReader(imgData))
-	if err != nil {
-		return fmt.Errorf("decode image: %w", err)
-	}
-
-	var pngBuf bytes.Buffer
-	if err := png.Encode(&pngBuf, img); err != nil {
-		return fmt.Errorf("encode png: %w", err)
-	}
-
-	b64 := base64.StdEncoding.EncodeToString(pngBuf.Bytes())
-
-	chunkSize := 4096
-	for i := 0; i < len(b64); i += chunkSize {
-		end := i + chunkSize
-		more := 1
-		if end >= len(b64) {
-			end = len(b64)
-			more = 0
-		}
-		chunk := b64[i:end]
-		if i == 0 {
-			// a=t (transmit & store without immediate placement), i=imageID, f=100 (PNG)
-			_, _ = fmt.Fprintf(os.Stdout, "\x1b_Ga=t,i=%d,f=100,t=d,m=%d;%s\x1b\\", imageID, more, chunk)
-		} else {
-			_, _ = fmt.Fprintf(os.Stdout, "\x1b_Gm=%d;%s\x1b\\", more, chunk)
-		}
-	}
-	return nil
+type rgb struct {
+	r, g, b float64
 }
 
-// deleteKittyImage deletes an image from Kitty's storage.
-func deleteKittyImage(imageID uint32) {
-	_, _ = fmt.Fprintf(os.Stdout, "\x1b_Ga=d,d=i,i=%d\x1b\\", imageID)
+func (c rgb) distSq(o rgb) float64 {
+	dr := c.r - o.r
+	dg := c.g - o.g
+	db := c.b - o.b
+	return dr*dr + dg*dg + db*db
 }
 
-// renderCoverToANSI renders an image into a slice of ANSI truecolor half-block strings.
-func renderCoverToANSI(imgData []byte, cols, rows int) ([]string, error) {
+func colorFromRGBA(c color.Color) rgb {
+	r, g, b, _ := c.RGBA()
+	return rgb{
+		r: float64(r >> 8),
+		g: float64(g >> 8),
+		b: float64(b >> 8),
+	}
+}
+
+// renderCoverQuadrant renders an image using 2x2 Unicode quadrant sub-pixels with 24-bit TrueColor.
+// Each character cell represents a 2x2 grid of sub-pixels, yielding 4x higher resolution than single blocks.
+func renderCoverQuadrant(imgData []byte, cols, rows int) ([]string, error) {
 	img, _, err := image.Decode(bytes.NewReader(imgData))
 	if err != nil {
 		return nil, fmt.Errorf("decode image: %w", err)
@@ -101,29 +101,82 @@ func renderCoverToANSI(imgData []byte, cols, rows int) ([]string, error) {
 		return nil, fmt.Errorf("empty image bounds")
 	}
 
-	pixelW := cols
+	pixelW := cols * 2
 	pixelH := rows * 2
 
 	var lines []string
 	for r := 0; r < rows; r++ {
-		topPixelY := r * 2
-		botPixelY := r*2 + 1
-
 		var sb strings.Builder
 		for c := 0; c < cols; c++ {
-			// Sample top pixel (maps to cell background)
-			srcTopX := bounds.Min.X + (c*srcW)/pixelW
-			srcTopY := bounds.Min.Y + (topPixelY*srcH)/pixelH
-			tr, tg, tb, _ := img.At(srcTopX, srcTopY).RGBA()
+			// Sample 4 quadrant pixels for this cell:
+			// p[0]: Top-Left, p[1]: Top-Right, p[2]: Bottom-Left, p[3]: Bottom-Right
+			coords := [4][2]int{
+				{c * 2, r * 2},
+				{c*2 + 1, r * 2},
+				{c * 2, r*2 + 1},
+				{c*2 + 1, r*2 + 1},
+			}
 
-			// Sample bottom pixel (maps to cell foreground with '▄')
-			srcBotX := bounds.Min.X + (c*srcW)/pixelW
-			srcBotY := bounds.Min.Y + (botPixelY*srcH)/pixelH
-			br, bg, bb, _ := img.At(srcBotX, srcBotY).RGBA()
+			var p [4]rgb
+			for i, xy := range coords {
+				sx := bounds.Min.X + (xy[0]*srcW)/pixelW
+				sy := bounds.Min.Y + (xy[1]*srcH)/pixelH
+				p[i] = colorFromRGBA(img.At(sx, sy))
+			}
 
-			sb.WriteString(fmt.Sprintf("\x1b[48;2;%d;%d;%dm\x1b[38;2;%d;%d;%dm▄",
-				byte(tr>>8), byte(tg>>8), byte(tb>>8),
-				byte(br>>8), byte(bg>>8), byte(bb>>8),
+			// Find two most distant colors among the 4 samples as initial cluster centers
+			maxDist := -1.0
+			c1Idx, c2Idx := 0, 1
+			for i := 0; i < 4; i++ {
+				for j := i + 1; j < 4; j++ {
+					d := p[i].distSq(p[j])
+					if d > maxDist {
+						maxDist = d
+						c1Idx, c2Idx = i, j
+					}
+				}
+			}
+
+			// 2-means clustering to partition 4 sub-pixels into Foreground and Background
+			fgCenter := p[c1Idx]
+			bgCenter := p[c2Idx]
+
+			mask := 0
+			var fgSum, bgSum rgb
+			fgCount, bgCount := 0, 0
+
+			for i := 0; i < 4; i++ {
+				dFG := p[i].distSq(fgCenter)
+				dBG := p[i].distSq(bgCenter)
+				if dFG <= dBG {
+					mask |= (1 << (3 - i))
+					fgSum.r += p[i].r
+					fgSum.g += p[i].g
+					fgSum.b += p[i].b
+					fgCount++
+				} else {
+					bgSum.r += p[i].r
+					bgSum.g += p[i].g
+					bgSum.b += p[i].b
+					bgCount++
+				}
+			}
+
+			fg := fgCenter
+			if fgCount > 0 {
+				fg = rgb{fgSum.r / float64(fgCount), fgSum.g / float64(fgCount), fgSum.b / float64(fgCount)}
+			}
+
+			bg := bgCenter
+			if bgCount > 0 {
+				bg = rgb{bgSum.r / float64(bgCount), bgSum.g / float64(bgCount), bgSum.b / float64(bgCount)}
+			}
+
+			ch := quadrantRunes[mask]
+			sb.WriteString(fmt.Sprintf("\x1b[48;2;%d;%d;%dm\x1b[38;2;%d;%d;%dm%c",
+				byte(bg.r), byte(bg.g), byte(bg.b),
+				byte(fg.r), byte(fg.g), byte(fg.b),
+				ch,
 			))
 		}
 		sb.WriteString("\x1b[0m")
@@ -133,20 +186,21 @@ func renderCoverToANSI(imgData []byte, cols, rows int) ([]string, error) {
 	return lines, nil
 }
 
-// renderPlaceholderCover generates a fixed-size 16x8 stylized vinyl disc placeholder.
+// renderPlaceholderCover generates a fixed-size 18x9 stylized vinyl disc placeholder.
 func renderPlaceholderCover() []string {
 	discStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#4C566A"))
 	noteStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#81A1C1")).Bold(true)
 	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#3B4252"))
 
 	return []string{
-		"                ",
-		discStyle.Render("    .------.    "),
-		discStyle.Render("   /   ") + noteStyle.Render("♫") + discStyle.Render("    \\   "),
-		discStyle.Render("  |    ") + noteStyle.Render("◉") + discStyle.Render("     |  "),
-		discStyle.Render("   \\        /   "),
-		discStyle.Render("    '------'    "),
-		labelStyle.Render("    NO COVER    "),
-		"                ",
+		"                  ",
+		discStyle.Render("     .------.     "),
+		discStyle.Render("    /   ") + noteStyle.Render("♫") + discStyle.Render("    \\    "),
+		discStyle.Render("   |    ") + noteStyle.Render("◉") + discStyle.Render("     |   "),
+		discStyle.Render("    \\        /    "),
+		discStyle.Render("     '------'     "),
+		labelStyle.Render("     NO COVER     "),
+		"                  ",
+		"                  ",
 	}
 }
