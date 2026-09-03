@@ -1,0 +1,29 @@
+version: '3'
+
+tasks:
+  default:
+    desc: Run tests and validation
+    cmds:
+      - task: test
+
+  test:
+    desc: Run unit and integration tests with race detector
+    cmds:
+      - go test -v -race ./...
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  tidy:
+    desc: Clean up and verify go.mod
+    cmds:
+      - go mod tidy
+
+  check:
+    desc: Run all checks (tidy, vet, test)
+    cmds:
+      - task: tidy
+      - task: vet
+      - task: test

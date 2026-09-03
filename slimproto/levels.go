@@ -1,0 +1,47 @@
+package slimproto
+
+import (
+	"sync/atomic"
+)
+
+// LevelsSnapshot captures an immutable stereo audio measurement.
+type LevelsSnapshot struct {
+	LeftDB  float64
+	RightDB float64
+	Playing bool
+}
+
+// AtomicLevels stores instantaneous stereo audio levels using atomic pointer snapshots,
+// guaranteeing a 100% atomic read snapshot with zero allocations on the read path.
+type AtomicLevels struct {
+	snapshot atomic.Pointer[LevelsSnapshot]
+}
+
+// NewAtomicLevels creates an initialized AtomicLevels instance with silence (-100 dB).
+func NewAtomicLevels() *AtomicLevels {
+	al := &AtomicLevels{}
+	al.snapshot.Store(&LevelsSnapshot{
+		LeftDB:  -100,
+		RightDB: -100,
+		Playing: false,
+	})
+	return al
+}
+
+// Set stores the dB levels and playing state in an atomic transaction.
+func (a *AtomicLevels) Set(leftDB, rightDB float64, playing bool) {
+	a.snapshot.Store(&LevelsSnapshot{
+		LeftDB:  leftDB,
+		RightDB: rightDB,
+		Playing: playing,
+	})
+}
+
+// Get loads the current dB levels and playing state atomically with zero allocations.
+func (a *AtomicLevels) Get() (leftDB, rightDB float64, playing bool) {
+	s := a.snapshot.Load()
+	if s == nil {
+		return -100, -100, false
+	}
+	return s.LeftDB, s.RightDB, s.Playing
+}
