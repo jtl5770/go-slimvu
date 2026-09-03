@@ -306,7 +306,7 @@ func main() {
 	minDB := flag.Float64("min-db", -60.0, "Minimum decibel level for scale")
 	maxDB := flag.Float64("max-db", 0.0, "Maximum decibel level for scale")
 	fps := flag.Int("fps", 60, "UI refresh rate (FPS)")
-	holdMS := flag.Int("hold", 60, "Peak hold time in milliseconds")
+	holdMS := flag.Int("hold", 250, "Peak hold time in milliseconds")
 	decay := flag.Float64("decay", 20.0, "Peak decay rate (blocks/sec)")
 
 	flag.Parse()
