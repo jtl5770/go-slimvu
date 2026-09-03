@@ -2,9 +2,14 @@ version: '3'
 
 tasks:
   default:
-    desc: Run tests and validation
+    desc: Build CLI binary and run tests
     cmds:
-      - task: test
+      - task: check
+
+  build:
+    desc: Build slimvu CLI executable
+    cmds:
+      - go build -o bin/slimvu ./cmd/slimvu
 
   test:
     desc: Run unit and integration tests with race detector
@@ -22,8 +27,9 @@ tasks:
       - go mod tidy
 
   check:
-    desc: Run all checks (tidy, vet, test)
+    desc: Run all checks (tidy, vet, test, build)
     cmds:
       - task: tidy
       - task: vet
       - task: test
+      - task: build
