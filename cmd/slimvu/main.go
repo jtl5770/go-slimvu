@@ -140,10 +140,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case artworkLoadedMsg:
-		if msg.key == m.artworkKey && len(msg.data) > 0 {
-			lines, err := renderCoverToANSI(msg.data, 14, 7)
-			if err == nil {
-				m.coverLines = lines
+		if msg.key == m.artworkKey {
+			if len(msg.data) > 0 {
+				lines, err := renderCoverToANSI(msg.data, 14, 7)
+				if err == nil {
+					m.coverLines = lines
+				} else {
+					m.coverLines = renderPlaceholderCover()
+				}
+			} else {
+				m.coverLines = renderPlaceholderCover()
 			}
 		}
 		return m, nil
@@ -166,8 +172,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			newKey := fmt.Sprintf("%s:%s:%s", m.track.ArtworkURL, m.track.CoverID, m.track.Title)
 			if newKey != m.artworkKey {
 				m.artworkKey = newKey
-				m.coverLines = nil
-				artworkCmd = fetchArtworkCmd(m.provider, m.track.ArtworkURL, m.track.CoverID, newKey)
+				if m.track.ArtworkURL != "" || m.track.CoverID != "" {
+					artworkCmd = fetchArtworkCmd(m.provider, m.track.ArtworkURL, m.track.CoverID, newKey)
+				} else {
+					m.coverLines = renderPlaceholderCover()
+				}
 			}
 		} else if !m.hasTrack {
 			m.artworkKey = ""
@@ -189,8 +198,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *model) getBarLength() int {
 	offset := 22
-	if m.showCover && len(m.coverLines) > 0 {
-		offset += 18 // Reserve columns for album art thumbnail
+	if m.showCover {
+		offset += 18 // Fixed width reservation for cover / placeholder frame
 	}
 
 	w := m.termWidth - offset
@@ -417,14 +426,19 @@ func (m model) renderTrackInfo(totalWidth int) string {
 }
 
 func (m model) renderCoverArt() string {
-	if len(m.coverLines) == 0 {
+	if !m.showCover {
 		return ""
 	}
 
+	lines := m.coverLines
+	if len(lines) == 0 {
+		lines = renderPlaceholderCover()
+	}
+
 	var sb strings.Builder
-	for i, line := range m.coverLines {
+	for i, line := range lines {
 		sb.WriteString(line)
-		if i < len(m.coverLines)-1 {
+		if i < len(lines)-1 {
 			sb.WriteString("\n")
 		}
 	}
@@ -480,8 +494,8 @@ func (m model) View() string {
 	}
 
 	var finalView string
-	coverBlock := m.renderCoverArt()
-	if coverBlock != "" {
+	if m.showCover {
+		coverBlock := m.renderCoverArt()
 		finalView = lipgloss.JoinHorizontal(lipgloss.Top, coverBlock, vuContent)
 	} else {
 		finalView = vuContent
@@ -492,6 +506,8 @@ func (m model) View() string {
 }
 
 func main() {
+	defaultCover := isTerminalGraphicsSupported()
+
 	server := flag.String("server", "", "LMS server host or IP (leave empty for UDP auto-discovery)")
 	slimPort := flag.Int("port", 0, "SlimProto port (default 3483 / auto-discovered)")
 	rpcPort := flag.Int("rpc", 0, "JSON-RPC port (default 9000 / auto-discovered)")
@@ -503,7 +519,7 @@ func main() {
 	fps := flag.Int("fps", 60, "UI refresh rate (FPS)")
 	holdMS := flag.Int("hold", 250, "Peak hold time in milliseconds")
 	decay := flag.Float64("decay", 20.0, "Peak decay rate (blocks/sec)")
-	cover := flag.Bool("cover", true, "Display album cover art thumbnail")
+	cover := flag.Bool("cover", defaultCover, "Display album cover art thumbnail (auto-detected by default)")
 	logPath := flag.String("log", "", "File path to write debug/info logs (disabled by default)")
 
 	flag.Parse()

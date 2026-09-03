@@ -23,8 +23,24 @@ import (
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
+	"os"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
 )
+
+// isTerminalGraphicsSupported detects whether the current terminal supports Kitty graphics or TrueColor thumbnails.
+func isTerminalGraphicsSupported() bool {
+	if os.Getenv("KITTY_WINDOW_ID") != "" ||
+		strings.Contains(strings.ToLower(os.Getenv("TERM")), "kitty") ||
+		os.Getenv("GHOSTTY_RESOURCES_DIR") != "" ||
+		os.Getenv("WEZTERM_PANE") != "" ||
+		os.Getenv("COLORTERM") == "truecolor" ||
+		os.Getenv("COLORTERM") == "24bit" {
+		return true
+	}
+	return false
+}
 
 // renderCoverToANSI renders an image into a slice of ANSI truecolor half-block strings.
 // cols: character width (e.g. 14)
@@ -72,4 +88,21 @@ func renderCoverToANSI(imgData []byte, cols, rows int) ([]string, error) {
 	}
 
 	return lines, nil
+}
+
+// renderPlaceholderCover generates a fixed-size 14x7 stylized vinyl disc placeholder.
+func renderPlaceholderCover() []string {
+	discStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#4C566A"))
+	noteStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#81A1C1")).Bold(true)
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#3B4252"))
+
+	return []string{
+		"              ",
+		discStyle.Render("   .------.   "),
+		discStyle.Render("  /   ") + noteStyle.Render("♫") + discStyle.Render("    \\  "),
+		discStyle.Render(" |    ") + noteStyle.Render("◉") + discStyle.Render("     | "),
+		discStyle.Render("  \\        /  "),
+		discStyle.Render("   '------'   "),
+		labelStyle.Render("   NO COVER   "),
+	}
 }
