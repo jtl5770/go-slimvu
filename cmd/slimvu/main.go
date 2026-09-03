@@ -218,7 +218,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) getBarLength() int {
-	offset := 22
+	offset := 20
 	if m.showCover {
 		offset += 22 // Fixed width reservation for 18-column cover box
 	}
@@ -226,8 +226,8 @@ func (m *model) getBarLength() int {
 	w := m.termWidth - offset
 	if w < 20 {
 		w = 20
-	} else if w > 90 {
-		w = 90
+	} else if w > 92 {
+		w = 92
 	}
 	return w
 }
@@ -322,14 +322,11 @@ func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) st
 	}
 
 	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ECEFF4"))
-	bracketStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#4C566A"))
 	valStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#D8DEE9"))
 
-	return fmt.Sprintf("%s  %s%s%s %s",
+	return fmt.Sprintf("%s  %s %s",
 		labelStyle.Render(label),
-		bracketStyle.Render("["),
 		sb.String(),
-		bracketStyle.Render("]"),
 		valStyle.Render(dbStr),
 	)
 }
@@ -352,7 +349,7 @@ func (m model) renderScale(barLen int) string {
 	}
 
 	scaleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#4C566A"))
-	indent := strings.Repeat(" ", 4) // "L  [" = 4
+	indent := strings.Repeat(" ", 3) // "L  " = 3
 	return indent + scaleStyle.Render(string(scaleLine))
 }
 
@@ -487,7 +484,7 @@ func (m model) renderCoverArt() string {
 
 func (m model) View() string {
 	barLen := m.getBarLength()
-	totalWidth := barLen + 15
+	totalWidth := barLen + 13
 
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
