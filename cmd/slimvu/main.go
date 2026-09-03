@@ -132,6 +132,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "esc", "ctrl+c":
 			return m, tea.Quit
+		case " ", "space":
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				_ = m.provider.TogglePause(ctx)
+			}()
+			return m, nil
+		case "n", ">", "right":
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				_ = m.provider.Next(ctx)
+			}()
+			return m, nil
+		case "p", "<", "left":
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				_ = m.provider.Previous(ctx)
+			}()
+			return m, nil
 		}
 
 	case tea.WindowSizeMsg:
@@ -367,11 +388,20 @@ func (m model) renderTrackInfo(totalWidth int) string {
 	}
 
 	var trackParts string
-	if m.track.TotalTracks > 0 && m.track.TrackNum > 0 {
-		digits := len(fmt.Sprintf("%d", m.track.TotalTracks))
-		trackParts = fmt.Sprintf("[%*d/%d]", digits, m.track.TrackNum, m.track.TotalTracks)
-	} else if m.track.TrackNum > 0 {
-		trackParts = fmt.Sprintf("[#%d]", m.track.TrackNum)
+	curIdx := m.track.PlaylistIndex
+	if curIdx <= 0 {
+		curIdx = m.track.TrackNum
+	}
+	total := m.track.PlaylistTotal
+	if total <= 0 {
+		total = m.track.TotalTracks
+	}
+
+	if total > 0 && curIdx > 0 {
+		digits := len(fmt.Sprintf("%d", total))
+		trackParts = fmt.Sprintf("[%*d/%d]", digits, curIdx, total)
+	} else if curIdx > 0 {
+		trackParts = fmt.Sprintf("[#%d]", curIdx)
 	}
 
 	rightBadge := strings.TrimSpace(trackParts + "  " + timeParts)
@@ -488,7 +518,7 @@ func (m model) View() string {
 	scale := m.renderScale(barLen)
 
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#4C566A"))
-	footer := helpStyle.Render("Press [q] or [Ctrl+C] to quit")
+	footer := helpStyle.Render("[Space] Play/Pause • [n/p or ←/→] Prev/Next • [q] Quit")
 
 	// The track info line slot is unconditionally rendered to prevent any vertical layout jumping
 	vuContent := fmt.Sprintf("%s\n\n%s\n\n%s\n%s\n%s\n\n%s", header, trackLine, leftBar, rightBar, scale, footer)

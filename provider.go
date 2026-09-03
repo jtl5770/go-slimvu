@@ -224,3 +224,43 @@ func (s *SqueezeboxAudioProvider) GetArtwork(ctx context.Context, artworkURL, co
 	}
 	return s.autoSync.GetArtwork(ctx, artworkURL, coverID)
 }
+
+// Next skips to the next track on the synchronized master player.
+func (s *SqueezeboxAudioProvider) Next(ctx context.Context) error {
+	if s.autoSync == nil {
+		return fmt.Errorf("autosync not enabled")
+	}
+	return s.autoSync.Next(ctx)
+}
+
+// Previous skips to the previous track on the synchronized master player.
+func (s *SqueezeboxAudioProvider) Previous(ctx context.Context) error {
+	if s.autoSync == nil {
+		return fmt.Errorf("autosync not enabled")
+	}
+	return s.autoSync.Previous(ctx)
+}
+
+// TogglePause toggles playback/pause on the synchronized master player.
+func (s *SqueezeboxAudioProvider) TogglePause(ctx context.Context) error {
+	if s.autoSync == nil {
+		return fmt.Errorf("autosync not enabled")
+	}
+	return s.autoSync.TogglePause(ctx)
+}
+
+// Play starts playback on the synchronized master player.
+func (s *SqueezeboxAudioProvider) Play(ctx context.Context) error {
+	if s.autoSync == nil {
+		return fmt.Errorf("autosync not enabled")
+	}
+	return s.autoSync.Play(ctx)
+}
+
+// StopPlayback stops playback on the synchronized master player.
+func (s *SqueezeboxAudioProvider) StopPlayback(ctx context.Context) error {
+	if s.autoSync == nil {
+		return fmt.Errorf("autosync not enabled")
+	}
+	return s.autoSync.StopPlayback(ctx)
+}

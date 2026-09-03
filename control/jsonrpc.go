@@ -28,56 +28,56 @@ import (
 	"time"
 )
 
-// JSONRPCRequest represents a standard LMS JSON-RPC payload.
+// JSONRPCRequest represents a request to the LMS JSON-RPC API.
 type JSONRPCRequest struct {
 	ID     int           `json:"id"`
 	Method string        `json:"method"`
 	Params []interface{} `json:"params"`
 }
 
-// JSONRPCResponse represents an LMS JSON-RPC response envelope.
+// JSONRPCResponse represents a generic response from LMS JSON-RPC.
 type JSONRPCResponse struct {
 	ID     int             `json:"id"`
 	Method string          `json:"method"`
 	Params []interface{}   `json:"params"`
 	Result json.RawMessage `json:"result"`
-	Error  interface{}     `json:"error"`
 }
 
-// PlayerInfo holds summary information for a player reported by LMS.
+// PlayerInfo holds basic info about a discovered player on LMS.
 type PlayerInfo struct {
 	PlayerID  string `json:"playerid"`
 	Name      string `json:"name"`
 	Model     string `json:"model"`
 	IsPlayer  int    `json:"isplayer"`
 	Connected int    `json:"connected"`
-	Power     int    `json:"power"`
+	IP        string `json:"ip"`
 }
 
-// PlaylistTrack represents track details inside the playlist_loop.
+// PlaylistTrack represents a single track item in playlist_loop.
 type PlaylistTrack struct {
-	Title       string      `json:"title"`
-	Artist      string      `json:"artist"`
-	Album       string      `json:"album"`
-	Duration    interface{} `json:"duration"`
-	TrackNum    interface{} `json:"tracknum"`
-	RemoteTitle string      `json:"remote_title"`
-	ArtworkURL  string      `json:"artwork_url"`
-	CoverID     string      `json:"coverid"`
+	Title      string      `json:"title"`
+	Artist     string      `json:"artist"`
+	Album      string      `json:"album"`
+	TrackNum   interface{} `json:"tracknum"`
+	Duration   interface{} `json:"duration"`
+	ArtworkURL string      `json:"artwork_url"`
+	CoverID    string      `json:"coverid"`
 }
 
-// TrackInfo holds parsed, clean track metadata for display.
+// TrackInfo holds normalized metadata for the currently active track.
 type TrackInfo struct {
-	Title        string  `json:"title"`
-	Artist       string  `json:"artist"`
-	Album        string  `json:"album"`
-	TrackNum     int     `json:"track_num"`
-	TotalTracks  int     `json:"total_tracks"`
-	Elapsed      float64 `json:"elapsed"`
-	Duration     float64 `json:"duration"`
-	IsLiveStream bool    `json:"is_live_stream"`
-	ArtworkURL   string  `json:"artwork_url"`
-	CoverID      string  `json:"coverid"`
+	Title         string  `json:"title"`
+	Artist        string  `json:"artist"`
+	Album         string  `json:"album"`
+	TrackNum      int     `json:"track_num"`      // Track number from album tags (if available)
+	PlaylistIndex int     `json:"playlist_index"` // 1-based index in the active playlist
+	PlaylistTotal int     `json:"playlist_total"` // Total count of tracks in the active playlist
+	TotalTracks   int     `json:"total_tracks"`   // Backwards-compatible alias for PlaylistTotal
+	Elapsed       float64 `json:"elapsed"`
+	Duration      float64 `json:"duration"`
+	IsLiveStream  bool    `json:"is_live_stream"`
+	ArtworkURL    string  `json:"artwork_url"`
+	CoverID       string  `json:"coverid"`
 }
 
 // PlayerStatus holds the playback state and metadata of a player.
@@ -143,15 +143,17 @@ func toInt(v interface{}) int {
 // GetTrackInfo extracts and normalizes the current track metadata from PlayerStatus.
 func (s *PlayerStatus) GetTrackInfo() TrackInfo {
 	info := TrackInfo{
-		Elapsed:     toFloat(s.Time),
-		Duration:    toFloat(s.Duration),
-		TotalTracks: toInt(s.PlaylistTracks),
-		ArtworkURL:  s.ArtworkURL,
-		CoverID:     s.CoverID,
+		Elapsed:       toFloat(s.Time),
+		Duration:      toFloat(s.Duration),
+		PlaylistTotal: toInt(s.PlaylistTracks),
+		TotalTracks:   toInt(s.PlaylistTracks),
+		ArtworkURL:    s.ArtworkURL,
+		CoverID:       s.CoverID,
 	}
 
 	if s.PlaylistCurIndex != nil {
-		info.TrackNum = toInt(s.PlaylistCurIndex) + 1
+		info.PlaylistIndex = toInt(s.PlaylistCurIndex) + 1
+		info.TrackNum = info.PlaylistIndex
 	}
 
 	if len(s.PlaylistLoop) > 0 {
@@ -162,7 +164,7 @@ func (s *PlayerStatus) GetTrackInfo() TrackInfo {
 		if info.Duration <= 0 {
 			info.Duration = toFloat(track.Duration)
 		}
-		if info.TrackNum <= 0 && track.TrackNum != nil {
+		if track.TrackNum != nil {
 			info.TrackNum = toInt(track.TrackNum)
 		}
 		if info.ArtworkURL == "" {
@@ -291,6 +293,36 @@ func (c *LMSClient) GetPlayerStatus(ctx context.Context, playerMAC string) (*Pla
 		result.PlayerID = playerMAC
 	}
 	return &result, nil
+}
+
+// Next skips to the next track in the playlist on the specified player.
+func (c *LMSClient) Next(ctx context.Context, playerMAC string) error {
+	cmd := []interface{}{"playlist", "index", "+1"}
+	return c.call(ctx, playerMAC, cmd, nil)
+}
+
+// Previous skips to the previous track in the playlist on the specified player.
+func (c *LMSClient) Previous(ctx context.Context, playerMAC string) error {
+	cmd := []interface{}{"playlist", "index", "-1"}
+	return c.call(ctx, playerMAC, cmd, nil)
+}
+
+// TogglePause toggles the play/pause state of the specified player.
+func (c *LMSClient) TogglePause(ctx context.Context, playerMAC string) error {
+	cmd := []interface{}{"pause"}
+	return c.call(ctx, playerMAC, cmd, nil)
+}
+
+// Play starts playback on the specified player.
+func (c *LMSClient) Play(ctx context.Context, playerMAC string) error {
+	cmd := []interface{}{"play"}
+	return c.call(ctx, playerMAC, cmd, nil)
+}
+
+// Stop stops playback on the specified player.
+func (c *LMSClient) Stop(ctx context.Context, playerMAC string) error {
+	cmd := []interface{}{"stop"}
+	return c.call(ctx, playerMAC, cmd, nil)
 }
 
 // GetArtwork fetches the image bytes for a cover or artwork URL from LMS.

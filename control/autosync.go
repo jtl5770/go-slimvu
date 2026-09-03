@@ -58,6 +58,11 @@ type LMSClientInterface interface {
 	UnsyncPlayer(ctx context.Context, ourMAC string) error
 	SetPlayerPref(ctx context.Context, playerMAC, pref, value string) error
 	GetArtwork(ctx context.Context, artworkURL, coverID, playerMAC string) ([]byte, error)
+	Next(ctx context.Context, playerMAC string) error
+	Previous(ctx context.Context, playerMAC string) error
+	TogglePause(ctx context.Context, playerMAC string) error
+	Play(ctx context.Context, playerMAC string) error
+	Stop(ctx context.Context, playerMAC string) error
 }
 
 // NewAutoSyncManager creates a new AutoSyncManager.
@@ -120,6 +125,40 @@ func (m *AutoSyncManager) GetArtwork(ctx context.Context, artworkURL, coverID st
 	synced := m.syncedWith
 	m.mu.Unlock()
 	return m.client.GetArtwork(ctx, artworkURL, coverID, synced)
+}
+
+func (m *AutoSyncManager) getTargetPlayer() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.syncedWith != "" {
+		return m.syncedWith
+	}
+	return m.cfg.OurMAC
+}
+
+// Next skips to the next track on the synchronized master player.
+func (m *AutoSyncManager) Next(ctx context.Context) error {
+	return m.client.Next(ctx, m.getTargetPlayer())
+}
+
+// Previous skips to the previous track on the synchronized master player.
+func (m *AutoSyncManager) Previous(ctx context.Context) error {
+	return m.client.Previous(ctx, m.getTargetPlayer())
+}
+
+// TogglePause toggles play/pause on the synchronized master player.
+func (m *AutoSyncManager) TogglePause(ctx context.Context) error {
+	return m.client.TogglePause(ctx, m.getTargetPlayer())
+}
+
+// Play starts playback on the synchronized master player.
+func (m *AutoSyncManager) Play(ctx context.Context) error {
+	return m.client.Play(ctx, m.getTargetPlayer())
+}
+
+// Stop stops playback on the synchronized master player.
+func (m *AutoSyncManager) StopPlayback(ctx context.Context) error {
+	return m.client.Stop(ctx, m.getTargetPlayer())
 }
 
 func (m *AutoSyncManager) isIgnored(p PlayerInfo) bool {
