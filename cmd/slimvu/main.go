@@ -73,10 +73,7 @@ type model struct {
 
 	tickCount int
 
-	colorGreen  lipgloss.Color
-	colorYellow lipgloss.Color
-	colorRed    lipgloss.Color
-	colorOff    lipgloss.Color
+	colorOff lipgloss.Color
 }
 
 type tickMsg time.Time
@@ -100,6 +97,38 @@ func fetchArtworkCmd(provider *slimvu.SqueezeboxAudioProvider, artworkURL, cover
 	}
 }
 
+func getMeterColor(t float64) lipgloss.Color {
+	if t < 0 {
+		t = 0
+	} else if t > 1 {
+		t = 1
+	}
+
+	var r, g, b float64
+	// Green:  #00E676 -> (0, 230, 118)
+	// Yellow: #FFD600 -> (255, 214, 0)
+	// Red:    #FF1744 -> (255, 23, 68)
+	// Transition 1 centered at 0.60 (from 0.45 to 0.75)
+	// Transition 2 centered at 0.85 (from 0.75 to 0.95)
+	if t < 0.45 {
+		r, g, b = 0, 230, 118
+	} else if t < 0.75 {
+		f := (t - 0.45) / (0.75 - 0.45)
+		r = 0 + f*(255-0)
+		g = 230 + f*(214-230)
+		b = 118 + f*(0-118)
+	} else if t < 0.95 {
+		f := (t - 0.75) / (0.95 - 0.75)
+		r = 255
+		g = 214 + f*(23-214)
+		b = 0 + f*(68-0)
+	} else {
+		r, g, b = 255, 23, 68
+	}
+
+	return lipgloss.Color(fmt.Sprintf("#%02X%02X%02X", byte(math.Round(r)), byte(math.Round(g)), byte(math.Round(b))))
+}
+
 func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64, fps int, holdTime time.Duration, decayRate float64, showCover bool) model {
 	return model{
 		provider:   provider,
@@ -115,10 +144,7 @@ func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64
 		termWidth:  80,
 		termHeight: 24,
 
-		colorGreen:  lipgloss.Color("#00E676"),
-		colorYellow: lipgloss.Color("#FFD600"),
-		colorRed:    lipgloss.Color("#FF1744"),
-		colorOff:    lipgloss.Color("#2E3440"),
+		colorOff: lipgloss.Color("#2E3440"),
 	}
 }
 
@@ -242,27 +268,20 @@ func (m *model) updatePeak(peak *peakInfo, db float64, barLen int, dt float64, n
 	level := (clampedDB - m.minDB) / (m.maxDB - m.minDB)
 	targetPeak := math.Ceil(level * float64(barLen))
 
-	greenEnd := int(float64(barLen) * 0.60)
-	yellowEnd := int(float64(barLen) * 0.85)
-
 	if targetPeak >= peak.position {
 		peak.position = targetPeak
 		peak.holdUntil = now.Add(m.holdTime)
 
-		idx := int(math.Round(targetPeak)) - 1
-		if idx < greenEnd {
-			peak.color = m.colorGreen
-		} else if idx < yellowEnd {
-			peak.color = m.colorYellow
-		} else {
-			peak.color = m.colorRed
-		}
+		t := (targetPeak - 0.5) / float64(barLen)
+		peak.color = getMeterColor(t)
 	} else {
 		if now.After(peak.holdUntil) && dt > 0 {
 			peak.position -= m.decayRate * dt
 			if peak.position < targetPeak {
 				peak.position = targetPeak
 			}
+			t := (peak.position - 0.5) / float64(barLen)
+			peak.color = getMeterColor(t)
 		}
 	}
 
@@ -277,9 +296,6 @@ func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) st
 	clampedDB := math.Min(m.maxDB, math.Max(m.minDB, db))
 	level := (clampedDB - m.minDB) / (m.maxDB - m.minDB)
 	activeBlocks := int(math.Ceil(level * float64(barLen)))
-
-	greenEnd := int(float64(barLen) * 0.60)
-	yellowEnd := int(float64(barLen) * 0.85)
 
 	peakIdx := -1
 	if peak.position >= 1.0 {
@@ -298,14 +314,8 @@ func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) st
 		}
 
 		if i < activeBlocks {
-			var col lipgloss.Color
-			if i < greenEnd {
-				col = m.colorGreen
-			} else if i < yellowEnd {
-				col = m.colorYellow
-			} else {
-				col = m.colorRed
-			}
+			t := float64(i) / float64(barLen-1)
+			col := getMeterColor(t)
 			blockStyle := lipgloss.NewStyle().Foreground(col)
 			sb.WriteString(blockStyle.Render("█"))
 		} else {
@@ -493,7 +503,7 @@ func (m model) View() string {
 	statusStyle := lipgloss.NewStyle().Bold(true)
 	var statusStr string
 	if m.playing {
-		statusStr = statusStyle.Foreground(m.colorGreen).Render("● PLAYING")
+		statusStr = statusStyle.Foreground(lipgloss.Color("#00E676")).Render("● PLAYING")
 	} else {
 		statusStr = statusStyle.Foreground(lipgloss.Color("#4C566A")).Render("■ IDLE")
 	}
