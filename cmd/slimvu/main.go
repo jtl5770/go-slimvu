@@ -68,8 +68,9 @@ type model struct {
 	track      slimvu.TrackInfo
 	hasTrack   bool
 
-	artworkKey string
-	coverLines []string
+	artworkKey  string
+	kittyEscape string
+	coverLines  []string
 
 	tickCount int
 
@@ -142,13 +143,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case artworkLoadedMsg:
 		if msg.key == m.artworkKey {
 			if len(msg.data) > 0 {
-				lines, err := renderCover(msg.data, 16, 8)
+				if isKittySupported() {
+					esc, err := encodeKittyEscape(msg.data, 16, 8)
+					if err == nil {
+						m.kittyEscape = esc
+						m.coverLines = nil
+						return m, nil
+					}
+				}
+				lines, err := renderCoverToANSI(msg.data, 16, 8)
 				if err == nil {
+					m.kittyEscape = ""
 					m.coverLines = lines
 				} else {
+					m.kittyEscape = ""
 					m.coverLines = renderPlaceholderCover()
 				}
 			} else {
+				m.kittyEscape = ""
 				m.coverLines = renderPlaceholderCover()
 			}
 		}
@@ -172,6 +184,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			newKey := fmt.Sprintf("%s:%s:%s", m.track.ArtworkURL, m.track.CoverID, m.track.Title)
 			if newKey != m.artworkKey {
 				m.artworkKey = newKey
+				m.kittyEscape = ""
 				if m.track.ArtworkURL != "" || m.track.CoverID != "" {
 					artworkCmd = fetchArtworkCmd(m.provider, m.track.ArtworkURL, m.track.CoverID, newKey)
 				} else {
@@ -180,6 +193,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else if !m.hasTrack {
 			m.artworkKey = ""
+			m.kittyEscape = ""
 			m.coverLines = nil
 		}
 
@@ -430,17 +444,30 @@ func (m model) renderCoverArt() string {
 		return ""
 	}
 
-	lines := m.coverLines
-	if len(lines) == 0 {
-		lines = renderPlaceholderCover()
-	}
-
-	var sb strings.Builder
-	for i, line := range lines {
-		sb.WriteString(line)
-		if i < len(lines)-1 {
-			sb.WriteString("\n")
+	var content string
+	if m.kittyEscape != "" {
+		// Provide clean whitespace grid so LipGloss calculates border geometry accurately
+		var sb strings.Builder
+		for r := 0; r < 8; r++ {
+			sb.WriteString(strings.Repeat(" ", 16))
+			if r < 7 {
+				sb.WriteString("\n")
+			}
 		}
+		content = sb.String()
+	} else {
+		lines := m.coverLines
+		if len(lines) == 0 {
+			lines = renderPlaceholderCover()
+		}
+		var sb strings.Builder
+		for i, line := range lines {
+			sb.WriteString(line)
+			if i < len(lines)-1 {
+				sb.WriteString("\n")
+			}
+		}
+		content = sb.String()
 	}
 
 	borderStyle := lipgloss.NewStyle().
@@ -448,7 +475,23 @@ func (m model) renderCoverArt() string {
 		BorderForeground(lipgloss.Color("#4C566A")).
 		MarginRight(2)
 
-	return borderStyle.Render(sb.String())
+	renderedBox := borderStyle.Render(content)
+
+	// If Kitty Graphics are active, inject the escape sequence into the first cell inside the box
+	if m.kittyEscape != "" {
+		lines := strings.Split(renderedBox, "\n")
+		if len(lines) > 1 {
+			// lines[0] is top border (╭──────╮), lines[1] is first inner row (│      │)
+			// Inject Kitty escape sequence directly after the first border character
+			firstBorderIdx := strings.Index(lines[1], "│")
+			if firstBorderIdx != -1 {
+				lines[1] = lines[1][:firstBorderIdx+len("│")] + m.kittyEscape + lines[1][firstBorderIdx+len("│"):]
+				renderedBox = strings.Join(lines, "\n")
+			}
+		}
+	}
+
+	return renderedBox
 }
 
 func (m model) View() string {

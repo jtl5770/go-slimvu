@@ -22,6 +22,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"strings"
 	"testing"
 )
 
@@ -37,14 +38,14 @@ func createTestPNG() []byte {
 	return buf.Bytes()
 }
 
-func TestRenderKittyCover(t *testing.T) {
+func TestEncodeKittyEscape(t *testing.T) {
 	pngData := createTestPNG()
-	lines, err := renderKittyCover(pngData, 16, 8)
+	esc, err := encodeKittyEscape(pngData, 16, 8)
 	if err != nil {
-		t.Fatalf("renderKittyCover error: %v", err)
+		t.Fatalf("encodeKittyEscape error: %v", err)
 	}
-	if len(lines) != 8 {
-		t.Errorf("expected 8 lines, got %d", len(lines))
+	if !strings.HasPrefix(esc, "\x1b_Ga=T,f=100") {
+		t.Errorf("expected Kitty escape prefix, got: %s", esc[:20])
 	}
 }
 

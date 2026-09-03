@@ -48,16 +48,16 @@ func isTerminalGraphicsSupported() bool {
 	return false
 }
 
-// renderKittyCover transmits the full-resolution image using the native Kitty Graphics Protocol.
-func renderKittyCover(imgData []byte, cols, rows int) ([]string, error) {
+// encodeKittyEscape builds the raw Kitty Graphics Protocol escape sequence.
+func encodeKittyEscape(imgData []byte, cols, rows int) (string, error) {
 	img, _, err := image.Decode(bytes.NewReader(imgData))
 	if err != nil {
-		return nil, fmt.Errorf("decode image: %w", err)
+		return "", fmt.Errorf("decode image: %w", err)
 	}
 
 	var pngBuf bytes.Buffer
 	if err := png.Encode(&pngBuf, img); err != nil {
-		return nil, fmt.Errorf("encode png: %w", err)
+		return "", fmt.Errorf("encode png: %w", err)
 	}
 
 	b64 := base64.StdEncoding.EncodeToString(pngBuf.Bytes())
@@ -80,17 +80,10 @@ func renderKittyCover(imgData []byte, cols, rows int) ([]string, error) {
 		}
 	}
 
-	lines := make([]string, rows)
-	lines[0] = kittyEsc.String() + strings.Repeat(" ", cols)
-	for r := 1; r < rows; r++ {
-		lines[r] = strings.Repeat(" ", cols)
-	}
-	return lines, nil
+	return kittyEsc.String(), nil
 }
 
 // renderCoverToANSI renders an image into a slice of ANSI truecolor half-block strings.
-// cols: character width (e.g. 16)
-// rows: character height (e.g. 8, which equals 16 vertical pixel rows)
 func renderCoverToANSI(imgData []byte, cols, rows int) ([]string, error) {
 	img, _, err := image.Decode(bytes.NewReader(imgData))
 	if err != nil {
@@ -134,14 +127,6 @@ func renderCoverToANSI(imgData []byte, cols, rows int) ([]string, error) {
 	}
 
 	return lines, nil
-}
-
-// renderCover renders an artwork image using native Kitty Graphics if supported, or TrueColor half-blocks otherwise.
-func renderCover(imgData []byte, cols, rows int) ([]string, error) {
-	if isKittySupported() {
-		return renderKittyCover(imgData, cols, rows)
-	}
-	return renderCoverToANSI(imgData, cols, rows)
 }
 
 // renderPlaceholderCover generates a fixed-size 16x8 stylized vinyl disc placeholder.
