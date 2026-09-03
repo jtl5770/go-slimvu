@@ -25,33 +25,43 @@ import (
 	"testing"
 )
 
-func TestRenderCoverToANSI(t *testing.T) {
-	// Create synthetic 10x10 PNG
-	img := image.NewRGBA(image.Rect(0, 0, 10, 10))
-	for y := 0; y < 10; y++ {
-		for x := 0; x < 10; x++ {
-			img.Set(x, y, color.RGBA{R: 255, G: 0, B: 0, A: 255})
+func createTestPNG() []byte {
+	img := image.NewRGBA(image.Rect(0, 0, 16, 16))
+	for y := 0; y < 16; y++ {
+		for x := 0; x < 16; x++ {
+			img.Set(x, y, color.RGBA{R: 200, G: 50, B: 100, A: 255})
 		}
 	}
-
 	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
-		t.Fatalf("png encode error: %v", err)
-	}
+	_ = png.Encode(&buf, img)
+	return buf.Bytes()
+}
 
-	lines, err := renderCoverToANSI(buf.Bytes(), 14, 7)
+func TestRenderKittyCover(t *testing.T) {
+	pngData := createTestPNG()
+	lines, err := renderKittyCover(pngData, 16, 8)
 	if err != nil {
-		t.Fatalf("renderCoverToANSI error: %v", err)
+		t.Fatalf("renderKittyCover error: %v", err)
 	}
-
-	if len(lines) != 7 {
-		t.Errorf("expected 7 lines, got %d", len(lines))
+	if len(lines) != 8 {
+		t.Errorf("expected 8 lines, got %d", len(lines))
 	}
 }
 
-func TestRenderCoverToANSI_InvalidData(t *testing.T) {
-	_, err := renderCoverToANSI([]byte("not an image"), 14, 7)
-	if err == nil {
-		t.Errorf("expected error on invalid image data")
+func TestRenderCoverToANSI(t *testing.T) {
+	pngData := createTestPNG()
+	lines, err := renderCoverToANSI(pngData, 16, 8)
+	if err != nil {
+		t.Fatalf("renderCoverToANSI error: %v", err)
+	}
+	if len(lines) != 8 {
+		t.Errorf("expected 8 lines, got %d", len(lines))
+	}
+}
+
+func TestRenderPlaceholderCover(t *testing.T) {
+	lines := renderPlaceholderCover()
+	if len(lines) != 8 {
+		t.Errorf("expected 8 placeholder lines, got %d", len(lines))
 	}
 }

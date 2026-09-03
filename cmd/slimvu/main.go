@@ -142,7 +142,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case artworkLoadedMsg:
 		if msg.key == m.artworkKey {
 			if len(msg.data) > 0 {
-				lines, err := renderCoverToANSI(msg.data, 14, 7)
+				lines, err := renderCover(msg.data, 16, 8)
 				if err == nil {
 					m.coverLines = lines
 				} else {
@@ -199,7 +199,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) getBarLength() int {
 	offset := 22
 	if m.showCover {
-		offset += 18 // Fixed width reservation for cover / placeholder frame
+		offset += 20 // Fixed width reservation for cover / placeholder frame
 	}
 
 	w := m.termWidth - offset

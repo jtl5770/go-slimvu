@@ -19,22 +19,28 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"image"
 	_ "image/jpeg"
-	_ "image/png"
+	"image/png"
 	"os"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
-// isTerminalGraphicsSupported detects whether the current terminal supports Kitty graphics or TrueColor thumbnails.
-func isTerminalGraphicsSupported() bool {
-	if os.Getenv("KITTY_WINDOW_ID") != "" ||
+// isKittySupported checks if the host terminal natively supports the Kitty Graphics Protocol.
+func isKittySupported() bool {
+	return os.Getenv("KITTY_WINDOW_ID") != "" ||
 		strings.Contains(strings.ToLower(os.Getenv("TERM")), "kitty") ||
 		os.Getenv("GHOSTTY_RESOURCES_DIR") != "" ||
-		os.Getenv("WEZTERM_PANE") != "" ||
+		os.Getenv("WEZTERM_PANE") != ""
+}
+
+// isTerminalGraphicsSupported detects whether the current terminal supports Kitty graphics or TrueColor thumbnails.
+func isTerminalGraphicsSupported() bool {
+	if isKittySupported() ||
 		os.Getenv("COLORTERM") == "truecolor" ||
 		os.Getenv("COLORTERM") == "24bit" {
 		return true
@@ -42,9 +48,49 @@ func isTerminalGraphicsSupported() bool {
 	return false
 }
 
+// renderKittyCover transmits the full-resolution image using the native Kitty Graphics Protocol.
+func renderKittyCover(imgData []byte, cols, rows int) ([]string, error) {
+	img, _, err := image.Decode(bytes.NewReader(imgData))
+	if err != nil {
+		return nil, fmt.Errorf("decode image: %w", err)
+	}
+
+	var pngBuf bytes.Buffer
+	if err := png.Encode(&pngBuf, img); err != nil {
+		return nil, fmt.Errorf("encode png: %w", err)
+	}
+
+	b64 := base64.StdEncoding.EncodeToString(pngBuf.Bytes())
+
+	var kittyEsc strings.Builder
+	chunkSize := 4096
+	for i := 0; i < len(b64); i += chunkSize {
+		end := i + chunkSize
+		more := 1
+		if end >= len(b64) {
+			end = len(b64)
+			more = 0
+		}
+		chunk := b64[i:end]
+		if i == 0 {
+			// Transmit & display immediately at current cursor position, sized to (cols x rows)
+			kittyEsc.WriteString(fmt.Sprintf("\x1b_Ga=T,f=100,t=d,c=%d,r=%d,m=%d;%s\x1b\\", cols, rows, more, chunk))
+		} else {
+			kittyEsc.WriteString(fmt.Sprintf("\x1b_Gm=%d;%s\x1b\\", more, chunk))
+		}
+	}
+
+	lines := make([]string, rows)
+	lines[0] = kittyEsc.String() + strings.Repeat(" ", cols)
+	for r := 1; r < rows; r++ {
+		lines[r] = strings.Repeat(" ", cols)
+	}
+	return lines, nil
+}
+
 // renderCoverToANSI renders an image into a slice of ANSI truecolor half-block strings.
-// cols: character width (e.g. 14)
-// rows: character height (e.g. 7, which equals 14 vertical pixel rows)
+// cols: character width (e.g. 16)
+// rows: character height (e.g. 8, which equals 16 vertical pixel rows)
 func renderCoverToANSI(imgData []byte, cols, rows int) ([]string, error) {
 	img, _, err := image.Decode(bytes.NewReader(imgData))
 	if err != nil {
@@ -90,19 +136,28 @@ func renderCoverToANSI(imgData []byte, cols, rows int) ([]string, error) {
 	return lines, nil
 }
 
-// renderPlaceholderCover generates a fixed-size 14x7 stylized vinyl disc placeholder.
+// renderCover renders an artwork image using native Kitty Graphics if supported, or TrueColor half-blocks otherwise.
+func renderCover(imgData []byte, cols, rows int) ([]string, error) {
+	if isKittySupported() {
+		return renderKittyCover(imgData, cols, rows)
+	}
+	return renderCoverToANSI(imgData, cols, rows)
+}
+
+// renderPlaceholderCover generates a fixed-size 16x8 stylized vinyl disc placeholder.
 func renderPlaceholderCover() []string {
 	discStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#4C566A"))
 	noteStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#81A1C1")).Bold(true)
 	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#3B4252"))
 
 	return []string{
-		"              ",
-		discStyle.Render("   .------.   "),
-		discStyle.Render("  /   ") + noteStyle.Render("♫") + discStyle.Render("    \\  "),
-		discStyle.Render(" |    ") + noteStyle.Render("◉") + discStyle.Render("     | "),
-		discStyle.Render("  \\        /  "),
-		discStyle.Render("   '------'   "),
-		labelStyle.Render("   NO COVER   "),
+		"                ",
+		discStyle.Render("    .------.    "),
+		discStyle.Render("   /   ") + noteStyle.Render("♫") + discStyle.Render("    \\   "),
+		discStyle.Render("  |    ") + noteStyle.Render("◉") + discStyle.Render("     |  "),
+		discStyle.Render("   \\        /   "),
+		discStyle.Render("    '------'    "),
+		labelStyle.Render("    NO COVER    "),
+		"                ",
 	}
 }
