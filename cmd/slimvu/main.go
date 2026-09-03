@@ -315,7 +315,7 @@ func (m model) renderTrackInfo(totalWidth int) string {
 	}
 
 	rightBadge := strings.TrimSpace(trackParts + "  " + timeParts)
-	rightBadgeLen := len(rightBadge)
+	rightBadgeLen := len([]rune(rightBadge))
 
 	// 3. Format Title & Artist
 	rawTitle := ""
@@ -328,7 +328,7 @@ func (m model) renderTrackInfo(totalWidth int) string {
 	}
 
 	icon := "♫ "
-	iconLen := 2
+	iconLen := 2 // 1 column rune + 1 column space
 	availWidth := totalWidth - rightBadgeLen - iconLen - 2
 	if availWidth < 10 {
 		availWidth = 10
@@ -350,7 +350,7 @@ func (m model) renderTrackInfo(totalWidth int) string {
 		displayTitle = string(looped)
 	}
 
-	// 5. Fixed Right-Flush Spacing
+	// 5. Fixed Right-Flush Spacing aligned with totalWidth
 	displayLen := len([]rune(displayTitle))
 	spacing := totalWidth - (iconLen + displayLen + rightBadgeLen)
 	if spacing < 1 {
@@ -371,8 +371,9 @@ func (m model) renderTrackInfo(totalWidth int) string {
 
 func (m model) View() string {
 	barLen := m.getBarLength()
-	// Total width of the VU visualizer line: "L  [" (4) + barLen + "] " (2) + "-12.4 dB" (8) + margin = barLen + 15
-	totalWidth := barLen + 15
+	// Total width of the VU visualizer line:
+	// "L" (1) + " " (1) + "[" (1) + barLen + "]" (1) + " " (1) + " -12.4 dB" (9) = barLen + 14
+	totalWidth := barLen + 14
 
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
