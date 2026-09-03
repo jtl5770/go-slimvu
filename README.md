@@ -25,6 +25,10 @@ High-performance, pure Go virtual Squeezebox / Logitech Media Server (LMS) audio
   - Full-color album cover art thumbnail rendered via 2×2 Unicode quadrant sub-pixel clustering with terminal cell aspect ratio compensation.
   - Live metadata tracking (`Artist · Album · Title`, elapsed/total duration, track number) with marquee scrolling.
 
+## Used By
+
+- [**GoLEDS**](https://github.com/jtl5770/goleds) — A flexible concurrent lighting system and reactive LED strip controller that uses `go-slimvu` to drive live stereo RMS decibel visualizers and multi-room audio sync.
+
 ## Installation
 
 ```bash
