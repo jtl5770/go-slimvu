@@ -373,7 +373,7 @@ func (m model) View() string {
 	barLen := m.getBarLength()
 	// Total width of the VU visualizer line:
 	// " " (1) + "L" (1) + "  " (2) + "[" (1) + barLen + "]" (1) + " " (1) + " -12.4 dB" (9) = 1 + (barLen + 14)
-	totalWidth := barLen + 14
+	totalWidth := barLen + 15
 
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
