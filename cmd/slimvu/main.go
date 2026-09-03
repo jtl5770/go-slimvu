@@ -316,7 +316,7 @@ func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) st
 
 	dbStr := ""
 	if !m.playing || db <= m.minDB {
-		dbStr = "  -inf dB"
+		dbStr = " -inf  dB"
 	} else {
 		dbStr = fmt.Sprintf("%6.1f dB", db)
 	}
