@@ -120,4 +120,4 @@ go test -v -race ./...
 
 ## License
 
-LGPL-3.0 License. See [LICENSE](LICENSE) for details.
+LGPL-3.0 License. See [COPYING.LESSER](COPYING.LESSER) and [COPYING](COPYING) for details.
