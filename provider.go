@@ -124,7 +124,7 @@ func NewProvider(cfg Config) (*SqueezeboxAudioProvider, error) {
 	}
 	pollInterval := cfg.PollInterval
 	if pollInterval <= 0 {
-		pollInterval = 1500 * time.Millisecond
+		pollInterval = 1000 * time.Millisecond
 	}
 
 	var mac net.HardwareAddr

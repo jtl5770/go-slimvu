@@ -31,7 +31,7 @@ type AutoSyncConfig struct {
 	OurMAC         string        // MAC address of our GoLEDs Squeezebox client
 	OurName        string        // Player name of our GoLEDs client
 	IgnoredPlayers []string      // List of player names or MACs to ignore
-	PollInterval   time.Duration // Polling interval (e.g. 1500ms)
+	PollInterval   time.Duration // Polling interval (e.g. 1000ms)
 }
 
 // AutoSyncManager continuously discovers active LMS players and synchronizes our client.
@@ -68,7 +68,7 @@ type LMSClientInterface interface {
 // NewAutoSyncManager creates a new AutoSyncManager.
 func NewAutoSyncManager(client LMSClientInterface, cfg AutoSyncConfig) *AutoSyncManager {
 	if cfg.PollInterval <= 0 {
-		cfg.PollInterval = 1500 * time.Millisecond
+		cfg.PollInterval = 1000 * time.Millisecond
 	}
 	return &AutoSyncManager{
 		client: client,
