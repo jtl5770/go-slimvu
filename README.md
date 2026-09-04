@@ -119,14 +119,16 @@ func main() {
 
 	for range ticker.C {
 		leftDB, rightDB, isPlaying := provider.GetLevels()
-		if isPlaying {
-			track, hasTrack := provider.GetTrackInfo()
-			if hasTrack {
-				fmt.Printf("[%s - %s] L: %6.1f dB | R: %6.1f dB\n", track.Artist, track.Title, leftDB, rightDB)
-			} else {
-				fmt.Printf("L: %6.1f dB | R: %6.1f dB\n", leftDB, rightDB)
-			}
+		if !isPlaying {
+			continue
 		}
+
+		prefix := ""
+		if track, ok := provider.GetTrackInfo(); ok {
+			prefix = fmt.Sprintf("[%s - %s] ", track.Artist, track.Title)
+		}
+
+		fmt.Printf("%sL: %6.1f dB | R: %6.1f dB\n", prefix, leftDB, rightDB)
 	}
 }
 ```
