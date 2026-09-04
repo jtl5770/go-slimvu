@@ -282,13 +282,13 @@ func (m *model) updatePeak(peak *peakInfo, db float64, barLen int, dt float64, n
 
 	clampedDB := math.Min(m.maxDB, math.Max(m.minDB, db))
 	level := (clampedDB - m.minDB) / (m.maxDB - m.minDB)
-	targetPeak := math.Ceil(level * float64(barLen))
+	targetPeak := level * float64(barLen)
 
 	if targetPeak >= peak.position {
 		peak.position = targetPeak
 		peak.holdUntil = now.Add(m.holdTime)
 
-		t := (targetPeak - 0.5) / float64(barLen)
+		t := targetPeak / float64(barLen)
 		peak.color = getMeterColor(t)
 	} else {
 		if now.After(peak.holdUntil) && dt > 0 {
@@ -309,32 +309,77 @@ func (m *model) updatePeak(peak *peakInfo, db float64, barLen int, dt float64, n
 func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) string {
 	clampedDB := math.Min(m.maxDB, math.Max(m.minDB, db))
 	level := (clampedDB - m.minDB) / (m.maxDB - m.minDB)
-	activeBlocks := int(math.Ceil(level * float64(barLen)))
+	barPos := level * float64(barLen)
 
-	peakIdx := -1
-	if peak.position >= 1.0 {
-		peakIdx = int(math.Round(peak.position)) - 1
-		if peakIdx >= barLen {
-			peakIdx = barLen - 1
+	subBlocks := [9]string{"", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"}
+
+	peakCell := -1
+	if peak.position >= 0.125 {
+		peakCell = int(peak.position)
+		if peakCell >= barLen {
+			peakCell = barLen - 1
 		}
 	}
 
 	var sb strings.Builder
 	for i := 0; i < barLen; i++ {
-		if i == peakIdx && i >= activeBlocks {
-			peakStyle := lipgloss.NewStyle().Foreground(peak.color).Bold(true)
-			sb.WriteString(peakStyle.Render("█"))
-			continue
-		}
+		t := float64(i) / float64(barLen-1)
+		col := getMeterColor(t)
+		isPeak := (i == peakCell)
 
-		if i < activeBlocks {
-			t := float64(i) / float64(barLen-1)
-			col := getMeterColor(t)
-			blockStyle := lipgloss.NewStyle().Foreground(col)
-			sb.WriteString(blockStyle.Render("█"))
+		if float64(i+1) <= barPos {
+			// Fully lit cell
+			if isPeak {
+				peakStyle := lipgloss.NewStyle().Foreground(peak.color).Bold(true)
+				sb.WriteString(peakStyle.Render("█"))
+			} else {
+				blockStyle := lipgloss.NewStyle().Foreground(col)
+				sb.WriteString(blockStyle.Render("█"))
+			}
+		} else if float64(i) < barPos {
+			// Fractional sub-pixel tip of the active bar
+			frac := barPos - float64(i)
+			subIdx := int(math.Round(frac * 8.0))
+			if subIdx > 8 {
+				subIdx = 8
+			}
+
+			if isPeak {
+				peakStyle := lipgloss.NewStyle().Foreground(peak.color).Bold(true)
+				if subIdx <= 0 {
+					sb.WriteString(peakStyle.Render("▏"))
+				} else {
+					sb.WriteString(peakStyle.Render(subBlocks[subIdx]))
+				}
+			} else if subIdx <= 0 {
+				offStyle := lipgloss.NewStyle().Foreground(m.colorOff)
+				sb.WriteString(offStyle.Render("░"))
+			} else if subIdx == 8 {
+				blockStyle := lipgloss.NewStyle().Foreground(col)
+				sb.WriteString(blockStyle.Render("█"))
+			} else {
+				tipStyle := lipgloss.NewStyle().Foreground(col)
+				sb.WriteString(tipStyle.Render(subBlocks[subIdx]))
+			}
 		} else {
-			offStyle := lipgloss.NewStyle().Foreground(m.colorOff)
-			sb.WriteString(offStyle.Render("░"))
+			// Dark / off region beyond bar
+			if isPeak {
+				// Floating peak needle positioned at sub-pixel accuracy
+				frac := peak.position - float64(i)
+				peakStyle := lipgloss.NewStyle().Foreground(peak.color).Bold(true)
+				if frac < 0.25 {
+					sb.WriteString(peakStyle.Render("▏"))
+				} else if frac < 0.50 {
+					sb.WriteString(peakStyle.Render("▎"))
+				} else if frac < 0.75 {
+					sb.WriteString(peakStyle.Render("▌"))
+				} else {
+					sb.WriteString(peakStyle.Render("▕"))
+				}
+			} else {
+				offStyle := lipgloss.NewStyle().Foreground(m.colorOff)
+				sb.WriteString(offStyle.Render("░"))
+			}
 		}
 	}
 
