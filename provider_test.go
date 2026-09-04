@@ -18,9 +18,16 @@
 package slimvu
 
 import (
+	"encoding/json"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"testing"
 	"time"
+
+	"github.com/jtl5770/go-slimvu/control"
 )
 
 func TestGeneratePlayerMAC(t *testing.T) {
@@ -114,5 +121,90 @@ func TestSqueezeboxAudioProvider_StartStopLifecycle(t *testing.T) {
 
 	if err := provider.Stop(); err != nil {
 		t.Fatalf("Failed to stop provider: %v", err)
+	}
+}
+
+func TestSqueezeboxAudioProvider_PlayerDiscoveryAndMetadata(t *testing.T) {
+	ourMAC := "00:04:20:ee:88:99"
+	physicalMAC := "00:04:20:77:77:77"
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req control.JSONRPCRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		player := ""
+		if len(req.Params) > 0 {
+			if p, ok := req.Params[0].(string); ok {
+				player = p
+			}
+		}
+
+		var cmd string
+		if len(req.Params) > 1 {
+			if cmds, ok := req.Params[1].([]interface{}); ok && len(cmds) > 0 {
+				cmd = cmds[0].(string)
+			}
+		}
+
+		switch cmd {
+		case "players":
+			resp := map[string]interface{}{
+				"players_loop": []map[string]interface{}{
+					{"playerid": ourMAC, "name": "SlimVU"},
+					{"playerid": physicalMAC, "name": "Living Room"},
+				},
+			}
+			data, _ := json.Marshal(resp)
+			_ = json.NewEncoder(w).Encode(control.JSONRPCResponse{Result: data})
+
+		case "status":
+			if player == ourMAC {
+				resp := map[string]interface{}{
+					"playerid":    ourMAC,
+					"player_name": "SlimVU",
+					"mode":        "stop",
+				}
+				data, _ := json.Marshal(resp)
+				_ = json.NewEncoder(w).Encode(control.JSONRPCResponse{Result: data})
+				return
+			}
+			resp := map[string]interface{}{
+				"playerid":      physicalMAC,
+				"player_name":   "Living Room",
+				"mode":          "play",
+				"current_title": "Jazz Song",
+				"playlist_loop": []map[string]interface{}{
+					{"title": "Jazz Song", "artist": "Miles Davis", "album": "Kind of Blue"},
+				},
+			}
+			data, _ := json.Marshal(resp)
+			_ = json.NewEncoder(w).Encode(control.JSONRPCResponse{Result: data})
+		}
+	}))
+	defer ts.Close()
+
+	u, _ := url.Parse(ts.URL)
+	port, _ := strconv.Atoi(u.Port())
+
+	cfg := Config{
+		Server:       u.Hostname(),
+		JSONRPCPort:  port,
+		PlayerMAC:    ourMAC,
+		PlayerName:   "SlimVU",
+		AutoSync:     false,
+		PollInterval: 20 * time.Millisecond,
+	}
+
+	provider, err := NewProvider(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create provider: %v", err)
+	}
+
+	players := provider.GetAllPlayers()
+	if len(players) != 1 || players[0].PlayerID != physicalMAC {
+		t.Fatalf("Expected 1 player (%s), got: %v", physicalMAC, players)
+	}
+	if players[0].Name != "Living Room" {
+		t.Fatalf("Expected Living Room, got: %s", players[0].Name)
 	}
 }

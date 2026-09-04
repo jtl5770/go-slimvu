@@ -34,9 +34,9 @@ import (
 
 // SqueezeboxAudioProvider implements AudioProvider using SlimProto and LMS JSON-RPC.
 type SqueezeboxAudioProvider struct {
-	levels   *AtomicLevels
-	proto    *slimproto.Client
-	autoSync *control.AutoSyncManager
+	levels    *AtomicLevels
+	proto     *slimproto.Client
+	playerMgr *control.PlayerManager
 }
 
 // Provider is an alias for SqueezeboxAudioProvider.
@@ -53,6 +53,12 @@ type Config struct {
 	AutoSync       bool          `yaml:"AutoSync"`
 	PollInterval   time.Duration `yaml:"PollInterval"`
 }
+
+// PlayerStatus is an alias for control.PlayerStatus.
+type PlayerStatus = control.PlayerStatus
+
+// TrackInfo is an alias for control.TrackInfo.
+type TrackInfo = control.TrackInfo
 
 // GeneratePlayerMAC derives a Squeezebox MAC address in the format 00:04:20:ee:Y:Z
 // where Y and Z are derived from the host's primary network interface hardware address.
@@ -150,22 +156,20 @@ func NewProvider(cfg Config) (*SqueezeboxAudioProvider, error) {
 
 	protoClient := slimproto.NewClient(serverSlim, helo, levels)
 
-	var autoSyncMgr *control.AutoSyncManager
-	if cfg.AutoSync {
-		lmsClient := control.NewLMSClient(serverHost, jsonrpcPort)
-		syncConfig := control.AutoSyncConfig{
-			OurMAC:         mac.String(),
-			OurName:        cfg.PlayerName,
-			IgnoredPlayers: cfg.IgnoredPlayers,
-			PollInterval:   pollInterval,
-		}
-		autoSyncMgr = control.NewAutoSyncManager(lmsClient, syncConfig)
+	lmsClient := control.NewLMSClient(serverHost, jsonrpcPort)
+	mgrConfig := control.Config{
+		OurMAC:         mac.String(),
+		OurName:        cfg.PlayerName,
+		AutoSync:       cfg.AutoSync,
+		IgnoredPlayers: cfg.IgnoredPlayers,
+		PollInterval:   pollInterval,
 	}
+	playerMgr := control.NewPlayerManager(lmsClient, mgrConfig)
 
 	return &SqueezeboxAudioProvider{
-		levels:   levels,
-		proto:    protoClient,
-		autoSync: autoSyncMgr,
+		levels:    levels,
+		proto:     protoClient,
+		playerMgr: playerMgr,
 	}, nil
 }
 
@@ -179,88 +183,101 @@ func (s *SqueezeboxAudioProvider) GetLevels() (leftDB, rightDB float64, playing 
 	return s.levels.Get()
 }
 
-// Start starts the SlimProto client and AutoSyncManager.
+// Start starts the SlimProto client and PlayerManager.
 func (s *SqueezeboxAudioProvider) Start() error {
 	if err := s.proto.Start(); err != nil {
 		return fmt.Errorf("start slimproto client: %w", err)
 	}
-	if s.autoSync != nil {
-		s.autoSync.Start()
+	if s.playerMgr != nil {
+		s.playerMgr.Start()
 	}
 	return nil
 }
 
-// Stop stops the AutoSyncManager and closes SlimProto connection.
+// Stop stops the PlayerManager and closes SlimProto connection.
 func (s *SqueezeboxAudioProvider) Stop() error {
-	if s.autoSync != nil {
-		s.autoSync.Stop()
+	if s.playerMgr != nil {
+		s.playerMgr.Stop()
 	}
 	return s.proto.Stop()
 }
 
-// SyncedWith returns the MAC address and name of the active LMS player currently synced with.
-func (s *SqueezeboxAudioProvider) SyncedWith() (mac, name string) {
-	if s.autoSync == nil {
-		return "", ""
+// GetAllPlayers returns a thread-safe snapshot copy of all connected external physical players.
+func (s *SqueezeboxAudioProvider) GetAllPlayers() []PlayerStatus {
+	if s.playerMgr == nil {
+		return nil
 	}
-	return s.autoSync.SyncedWith()
+	return s.playerMgr.GetAllPlayers()
 }
 
-// TrackInfo is an alias for control.TrackInfo.
-type TrackInfo = control.TrackInfo
+// GetOurPlayer returns the status of our SlimVU player.
+func (s *SqueezeboxAudioProvider) GetOurPlayer() PlayerStatus {
+	if s.playerMgr == nil {
+		return PlayerStatus{}
+	}
+	return s.playerMgr.GetOurPlayer()
+}
 
-// GetTrackInfo returns the current TrackInfo of the active synchronized player, if available.
+// SyncedWith returns the MAC address and name of the active LMS player currently synced with.
+func (s *SqueezeboxAudioProvider) SyncedWith() (mac, name string) {
+	if s.playerMgr == nil {
+		return "", ""
+	}
+	return s.playerMgr.SyncedWith()
+}
+
+// GetTrackInfo returns the current TrackInfo of our player (and sync group).
 func (s *SqueezeboxAudioProvider) GetTrackInfo() (TrackInfo, bool) {
-	if s.autoSync == nil {
+	if s.playerMgr == nil {
 		return TrackInfo{}, false
 	}
-	return s.autoSync.SyncedTrack()
+	return s.playerMgr.SyncedTrack()
 }
 
 // GetArtwork fetches the image bytes for a track artwork URL or current player cover.
 func (s *SqueezeboxAudioProvider) GetArtwork(ctx context.Context, artworkURL, coverID string) ([]byte, error) {
-	if s.autoSync == nil {
-		return nil, fmt.Errorf("autosync not enabled")
+	if s.playerMgr == nil {
+		return nil, fmt.Errorf("player manager not initialized")
 	}
-	return s.autoSync.GetArtwork(ctx, artworkURL, coverID)
+	return s.playerMgr.GetArtwork(ctx, artworkURL, coverID)
 }
 
-// Next skips to the next track on the synchronized master player.
+// Next skips to the next track on our player (or active sync group).
 func (s *SqueezeboxAudioProvider) Next(ctx context.Context) error {
-	if s.autoSync == nil {
-		return fmt.Errorf("autosync not enabled")
+	if s.playerMgr == nil {
+		return fmt.Errorf("player manager not initialized")
 	}
-	return s.autoSync.Next(ctx)
+	return s.playerMgr.Next(ctx)
 }
 
-// Previous skips to the previous track on the synchronized master player.
+// Previous skips to the previous track on our player (or active sync group).
 func (s *SqueezeboxAudioProvider) Previous(ctx context.Context) error {
-	if s.autoSync == nil {
-		return fmt.Errorf("autosync not enabled")
+	if s.playerMgr == nil {
+		return fmt.Errorf("player manager not initialized")
 	}
-	return s.autoSync.Previous(ctx)
+	return s.playerMgr.Previous(ctx)
 }
 
-// TogglePause toggles playback/pause on the synchronized master player.
+// TogglePause toggles playback/pause on our player (or active sync group).
 func (s *SqueezeboxAudioProvider) TogglePause(ctx context.Context) error {
-	if s.autoSync == nil {
-		return fmt.Errorf("autosync not enabled")
+	if s.playerMgr == nil {
+		return fmt.Errorf("player manager not initialized")
 	}
-	return s.autoSync.TogglePause(ctx)
+	return s.playerMgr.TogglePause(ctx)
 }
 
-// Play starts playback on the synchronized master player.
+// Play starts playback on our player (or active sync group).
 func (s *SqueezeboxAudioProvider) Play(ctx context.Context) error {
-	if s.autoSync == nil {
-		return fmt.Errorf("autosync not enabled")
+	if s.playerMgr == nil {
+		return fmt.Errorf("player manager not initialized")
 	}
-	return s.autoSync.Play(ctx)
+	return s.playerMgr.Play(ctx)
 }
 
-// StopPlayback stops playback on the synchronized master player.
+// StopPlayback stops playback on our player (or active sync group).
 func (s *SqueezeboxAudioProvider) StopPlayback(ctx context.Context) error {
-	if s.autoSync == nil {
-		return fmt.Errorf("autosync not enabled")
+	if s.playerMgr == nil {
+		return fmt.Errorf("player manager not initialized")
 	}
-	return s.autoSync.StopPlayback(ctx)
+	return s.playerMgr.StopPlayback(ctx)
 }
