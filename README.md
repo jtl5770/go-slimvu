@@ -2,7 +2,7 @@
 
 High-performance, pure Go virtual Squeezebox / Logitech Media Server (LMS) audio level provider and VU meter engine.
 
-![slimvu TUI](assets/screencast.gif)
+![slimvu TUI](assets/screencast.webp)
 
 `go-slimvu` emulates a hardware Squeezebox player over the **SlimProto** protocol, decodes incoming audio streams in real time with high-precision sample pacing, and exposes lock-free, zero-allocation left/right stereo RMS decibel levels for LED visualizers, displays, terminal visualizers, and audio monitors.
 
