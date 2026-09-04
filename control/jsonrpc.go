@@ -359,9 +359,9 @@ func (c *LMSClient) GetArtwork(ctx context.Context, artworkURL, coverID, playerM
 }
 
 // SyncPlayer synchronizes our player (ourMAC, the slave) with a master player (targetMAC).
-func (c *LMSClient) SyncPlayer(ctx context.Context, ourMAC, targetMAC string) error {
-	cmd := []interface{}{"sync", ourMAC}
-	return c.call(ctx, targetMAC, cmd, nil)
+func (c *LMSClient) SyncPlayer(ctx context.Context, slaveMAC, masterMAC string) error {
+	cmd := []interface{}{"sync", slaveMAC}
+	return c.call(ctx, masterMAC, cmd, nil)
 }
 
 // SyncPlayers is an alias for SyncPlayer.

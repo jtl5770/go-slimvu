@@ -59,7 +59,7 @@ func EncodeHelo(cfg HeloConfig) []byte {
 	if caps == "" {
 		modelName := cfg.PlayerName
 		if modelName == "" {
-			modelName = "GoLEDs VU"
+			modelName = "SlimVU"
 		}
 		caps = fmt.Sprintf("Model=squeezelite,ModelName=%s,MaxSampleRate=384000,AccuratePlayPoints=1,HasDigitalOut=1,HasPolarityInversion=1,Firmware=v1.9.9-1414,flc,pcm,mp3,aac,ogg,ops", modelName)
 	}

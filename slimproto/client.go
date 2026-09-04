@@ -69,7 +69,6 @@ type Client struct {
 
 	transport   *TCPTransport
 	fetcher     StreamFetcher
-	flacDecoder *FLACDecoder
 	ringBuffer  *AudioRingBuffer
 	clock       Clock
 	consumer    *PacedConsumer
@@ -117,7 +116,6 @@ func NewClient(serverAddr string, heloConfig HeloConfig, levels *AtomicLevels) *
 		heloConfig:  heloConfig,
 		levels:      levels,
 		fetcher:     NewHTTPStreamer(5 * time.Second),
-		flacDecoder: NewFLACDecoder(),
 		ringBuffer:  rb,
 		clock:       clock,
 		ctx:         ctx,
@@ -517,7 +515,7 @@ func (c *Client) streamDataWorker(ctx context.Context, strm *StrmCommand) {
 	var decoder Decoder
 	switch strm.Format {
 	case 'f':
-		decoder = c.flacDecoder
+		decoder = NewFLACDecoder()
 	case 'p':
 		decoder = NewPCMDecoder(ParsePCMConfig(strm.PCMSampleRate, strm.PCMSampleSize, strm.PCMChannels, strm.PCMEndianness))
 	case 'm':
@@ -530,7 +528,7 @@ func (c *Client) streamDataWorker(ctx context.Context, strm *StrmCommand) {
 		decoder = NewOpusDecoder()
 	default:
 		slog.Warn("SlimProto received stream format, attempting FLAC decoder", "format", string(strm.Format))
-		decoder = c.flacDecoder
+		decoder = NewFLACDecoder()
 	}
 
 	if err := decoder.Decode(ctx, meta.BodyReader, c.ringBuffer, thresholdBytes, c); err != nil && ctx.Err() == nil {

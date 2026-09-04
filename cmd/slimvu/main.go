@@ -33,10 +33,22 @@ import (
 	"github.com/jtl5770/go-slimvu"
 )
 
+type colorRGB struct {
+	r, g, b uint8
+}
+
+func (c colorRGB) String() string {
+	return fmt.Sprintf("\x1b[38;2;%d;%d;%dm", c.r, c.g, c.b)
+}
+
+func (c colorRGB) BoldString() string {
+	return fmt.Sprintf("\x1b[1;38;2;%d;%d;%dm", c.r, c.g, c.b)
+}
+
 type peakInfo struct {
 	position  float64
 	holdUntil time.Time
-	color     lipgloss.Color
+	color     colorRGB
 }
 
 type artworkLoadedMsg struct {
@@ -73,8 +85,6 @@ type model struct {
 	coverLines []string
 
 	tickCount int
-
-	colorOff lipgloss.Color
 }
 
 type tickMsg time.Time
@@ -98,7 +108,7 @@ func fetchArtworkCmd(provider *slimvu.SqueezeboxAudioProvider, artworkURL, cover
 	}
 }
 
-func getMeterColor(t float64) lipgloss.Color {
+func getMeterColor(t float64) colorRGB {
 	if t < 0 {
 		t = 0
 	} else if t > 1 {
@@ -127,7 +137,11 @@ func getMeterColor(t float64) lipgloss.Color {
 		r, g, b = 255, 23, 68
 	}
 
-	return lipgloss.Color(fmt.Sprintf("#%02X%02X%02X", byte(math.Round(r)), byte(math.Round(g)), byte(math.Round(b))))
+	return colorRGB{
+		r: uint8(math.Round(r)),
+		g: uint8(math.Round(g)),
+		b: uint8(math.Round(b)),
+	}
 }
 
 func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64, fps int, holdTime time.Duration, decayRate float64, showCover bool, cellAspect float64) model {
@@ -149,8 +163,6 @@ func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64
 		rightDB:    minDB,
 		termWidth:  80,
 		termHeight: 24,
-
-		colorOff: lipgloss.Color("#2E3440"),
 	}
 }
 
@@ -306,6 +318,11 @@ func (m *model) updatePeak(peak *peakInfo, db float64, barLen int, dt float64, n
 	}
 }
 
+const (
+	ansiReset = "\x1b[0m"
+	ansiOff   = "\x1b[38;2;46;52;64m" // #2E3440
+)
+
 func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) string {
 	clampedDB := math.Min(m.maxDB, math.Max(m.minDB, db))
 	level := (clampedDB - m.minDB) / (m.maxDB - m.minDB)
@@ -322,6 +339,8 @@ func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) st
 	}
 
 	var sb strings.Builder
+	sb.Grow(barLen * 24)
+
 	for i := 0; i < barLen; i++ {
 		t := float64(i) / float64(barLen-1)
 		col := getMeterColor(t)
@@ -330,11 +349,13 @@ func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) st
 		if float64(i+1) <= barPos {
 			// Fully lit cell
 			if isPeak {
-				peakStyle := lipgloss.NewStyle().Foreground(peak.color).Bold(true)
-				sb.WriteString(peakStyle.Render("█"))
+				sb.WriteString(peak.color.BoldString())
+				sb.WriteString("█")
+				sb.WriteString(ansiReset)
 			} else {
-				blockStyle := lipgloss.NewStyle().Foreground(col)
-				sb.WriteString(blockStyle.Render("█"))
+				sb.WriteString(col.String())
+				sb.WriteString("█")
+				sb.WriteString(ansiReset)
 			}
 		} else if float64(i) < barPos {
 			// Fractional sub-pixel tip of the active bar
@@ -345,40 +366,46 @@ func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) st
 			}
 
 			if isPeak {
-				peakStyle := lipgloss.NewStyle().Foreground(peak.color).Bold(true)
+				sb.WriteString(peak.color.BoldString())
 				if subIdx <= 0 {
-					sb.WriteString(peakStyle.Render("▏"))
+					sb.WriteString("▏")
 				} else {
-					sb.WriteString(peakStyle.Render(subBlocks[subIdx]))
+					sb.WriteString(subBlocks[subIdx])
 				}
+				sb.WriteString(ansiReset)
 			} else if subIdx <= 0 {
-				offStyle := lipgloss.NewStyle().Foreground(m.colorOff)
-				sb.WriteString(offStyle.Render("░"))
+				sb.WriteString(ansiOff)
+				sb.WriteString("░")
+				sb.WriteString(ansiReset)
 			} else if subIdx == 8 {
-				blockStyle := lipgloss.NewStyle().Foreground(col)
-				sb.WriteString(blockStyle.Render("█"))
+				sb.WriteString(col.String())
+				sb.WriteString("█")
+				sb.WriteString(ansiReset)
 			} else {
-				tipStyle := lipgloss.NewStyle().Foreground(col)
-				sb.WriteString(tipStyle.Render(subBlocks[subIdx]))
+				sb.WriteString(col.String())
+				sb.WriteString(subBlocks[subIdx])
+				sb.WriteString(ansiReset)
 			}
 		} else {
 			// Dark / off region beyond bar
 			if isPeak {
 				// Floating peak needle positioned at sub-pixel accuracy
 				frac := peak.position - float64(i)
-				peakStyle := lipgloss.NewStyle().Foreground(peak.color).Bold(true)
+				sb.WriteString(peak.color.BoldString())
 				if frac < 0.25 {
-					sb.WriteString(peakStyle.Render("▏"))
+					sb.WriteString("▏")
 				} else if frac < 0.50 {
-					sb.WriteString(peakStyle.Render("▎"))
+					sb.WriteString("▎")
 				} else if frac < 0.75 {
-					sb.WriteString(peakStyle.Render("▌"))
+					sb.WriteString("▌")
 				} else {
-					sb.WriteString(peakStyle.Render("▕"))
+					sb.WriteString("▕")
 				}
+				sb.WriteString(ansiReset)
 			} else {
-				offStyle := lipgloss.NewStyle().Foreground(m.colorOff)
-				sb.WriteString(offStyle.Render("░"))
+				sb.WriteString(ansiOff)
+				sb.WriteString("░")
+				sb.WriteString(ansiReset)
 			}
 		}
 	}
