@@ -158,6 +158,14 @@ func (m model) Init() tea.Cmd {
 	return tickCmd(m.fps)
 }
 
+func (m model) getCoverCols() int {
+	cols := int(math.Round(9.0 * m.cellAspect))
+	if cols < 8 {
+		cols = 8
+	}
+	return cols
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -194,15 +202,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case artworkLoadedMsg:
 		if msg.key == m.artworkKey {
+			cols := m.getCoverCols()
 			if len(msg.data) > 0 {
-				lines, err := renderCoverQuadrant(msg.data, 18, 9, m.cellAspect)
+				lines, err := renderCoverQuadrant(msg.data, cols, 9, m.cellAspect)
 				if err == nil {
 					m.coverLines = lines
 				} else {
-					m.coverLines = renderPlaceholderCover()
+					m.coverLines = renderPlaceholderCover(cols)
 				}
 			} else {
-				m.coverLines = renderPlaceholderCover()
+				m.coverLines = renderPlaceholderCover(cols)
 			}
 		}
 		return m, nil
@@ -228,7 +237,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.track.ArtworkURL != "" || m.track.CoverID != "" {
 					artworkCmd = fetchArtworkCmd(m.provider, m.track.ArtworkURL, m.track.CoverID, newKey)
 				} else {
-					m.coverLines = renderPlaceholderCover()
+					m.coverLines = renderPlaceholderCover(m.getCoverCols())
 				}
 			}
 		} else if !m.hasTrack {
@@ -252,7 +261,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) getBarLength() int {
 	offset := 20
 	if m.showCover {
-		offset += 22 // Fixed width reservation for 18-column cover box
+		// Border (2 cols) + MarginRight (2 cols) + cover box width
+		offset += m.getCoverCols() + 4
 	}
 
 	w := m.termWidth - offset
@@ -477,7 +487,7 @@ func (m model) renderCoverArt() string {
 
 	lines := m.coverLines
 	if len(lines) == 0 {
-		lines = renderPlaceholderCover()
+		lines = renderPlaceholderCover(m.getCoverCols())
 	}
 
 	var sb strings.Builder

@@ -49,7 +49,7 @@ func TestRenderCoverQuadrant(t *testing.T) {
 }
 
 func TestRenderPlaceholderCover(t *testing.T) {
-	lines := renderPlaceholderCover()
+	lines := renderPlaceholderCover(14)
 	if len(lines) != 9 {
 		t.Errorf("expected 9 placeholder lines, got %d", len(lines))
 	}

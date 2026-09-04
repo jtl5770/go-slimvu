@@ -217,19 +217,31 @@ func renderCoverQuadrant(imgData []byte, cols, rows int, cellAspect float64) ([]
 	return lines, nil
 }
 
-// renderPlaceholderCover generates a clean fixed-size 18x9 placeholder with centered "NO COVER".
-func renderPlaceholderCover() []string {
-	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#4C566A")).Bold(true)
-
-	return []string{
-		"                  ",
-		"                  ",
-		"                  ",
-		"                  ",
-		labelStyle.Render("     NO COVER     "),
-		"                  ",
-		"                  ",
-		"                  ",
-		"                  ",
+// renderPlaceholderCover generates a clean fixed-size placeholder with centered "NO COVER".
+func renderPlaceholderCover(cols int) []string {
+	if cols < 8 {
+		cols = 8
 	}
+	label := "NO COVER"
+	padLeft := (cols - len(label)) / 2
+	if padLeft < 0 {
+		padLeft = 0
+	}
+	padRight := cols - len(label) - padLeft
+	if padRight < 0 {
+		padRight = 0
+	}
+	centered := strings.Repeat(" ", padLeft) + label + strings.Repeat(" ", padRight)
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#4C566A")).Bold(true)
+	blank := strings.Repeat(" ", cols)
+
+	lines := make([]string, 9)
+	for i := range lines {
+		if i == 4 {
+			lines[i] = labelStyle.Render(centered)
+		} else {
+			lines[i] = blank
+		}
+	}
+	return lines
 }
