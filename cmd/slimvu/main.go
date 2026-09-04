@@ -52,6 +52,7 @@ type model struct {
 	holdTime   time.Duration
 	decayRate  float64
 	showCover  bool
+	cellAspect float64
 	lastUpdate time.Time
 
 	termWidth  int
@@ -129,7 +130,11 @@ func getMeterColor(t float64) lipgloss.Color {
 	return lipgloss.Color(fmt.Sprintf("#%02X%02X%02X", byte(math.Round(r)), byte(math.Round(g)), byte(math.Round(b))))
 }
 
-func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64, fps int, holdTime time.Duration, decayRate float64, showCover bool) model {
+func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64, fps int, holdTime time.Duration, decayRate float64, showCover bool, cellAspect float64) model {
+	if cellAspect <= 0 {
+		cellAspect = detectCellAspect()
+	}
+
 	return model{
 		provider:   provider,
 		minDB:      minDB,
@@ -138,6 +143,7 @@ func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64
 		holdTime:   holdTime,
 		decayRate:  decayRate,
 		showCover:  showCover,
+		cellAspect: cellAspect,
 		lastUpdate: time.Now(),
 		leftDB:     minDB,
 		rightDB:    minDB,
@@ -189,7 +195,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case artworkLoadedMsg:
 		if msg.key == m.artworkKey {
 			if len(msg.data) > 0 {
-				lines, err := renderCoverQuadrant(msg.data, 18, 9)
+				lines, err := renderCoverQuadrant(msg.data, 18, 9, m.cellAspect)
 				if err == nil {
 					m.coverLines = lines
 				} else {
@@ -556,6 +562,7 @@ func main() {
 	holdMS := flag.Int("hold", 250, "Peak hold time in milliseconds")
 	decay := flag.Float64("decay", 20.0, "Peak decay rate (blocks/sec)")
 	cover := flag.Bool("cover", defaultCover, "Display album cover art thumbnail (auto-detected by default)")
+	cellAspect := flag.Float64("cell-aspect", 0.0, "Terminal character cell aspect ratio Height/Width (0.0 for auto-detect)")
 	logPath := flag.String("log", "", "File path to write debug/info logs (disabled by default)")
 
 	flag.Parse()
@@ -591,7 +598,7 @@ func main() {
 	}
 	defer provider.Stop()
 
-	m := initialModel(provider, *minDB, *maxDB, *fps, time.Duration(*holdMS)*time.Millisecond, *decay, *cover)
+	m := initialModel(provider, *minDB, *maxDB, *fps, time.Duration(*holdMS)*time.Millisecond, *decay, *cover, *cellAspect)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

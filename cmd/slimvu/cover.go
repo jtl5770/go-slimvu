@@ -83,8 +83,8 @@ func colorFromRGBA(c color.Color) rgb {
 }
 
 // renderCoverQuadrant renders an image using 2x2 Unicode quadrant sub-pixels with 24-bit TrueColor,
-// compensating for the non-square aspect ratio of monospace terminal font cells (~1:2).
-func renderCoverQuadrant(imgData []byte, cols, rows int) ([]string, error) {
+// dynamically compensating for the aspect ratio of monospace terminal font cells (Height / Width).
+func renderCoverQuadrant(imgData []byte, cols, rows int, cellAspect float64) ([]string, error) {
 	img, _, err := image.Decode(bytes.NewReader(imgData))
 	if err != nil {
 		return nil, fmt.Errorf("decode image: %w", err)
@@ -97,8 +97,10 @@ func renderCoverQuadrant(imgData []byte, cols, rows int) ([]string, error) {
 		return nil, fmt.Errorf("empty image bounds")
 	}
 
-	// Monospace terminal cells are approximately 1:2.05 in aspect ratio (width : height)
-	cellAspect := 2.05
+	if cellAspect <= 0 {
+		cellAspect = 1.6
+	}
+
 	dispW := float64(cols)
 	dispH := float64(rows) * cellAspect
 

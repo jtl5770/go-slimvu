@@ -39,7 +39,7 @@ func createTestPNG() []byte {
 
 func TestRenderCoverQuadrant(t *testing.T) {
 	pngData := createTestPNG()
-	lines, err := renderCoverQuadrant(pngData, 18, 9)
+	lines, err := renderCoverQuadrant(pngData, 18, 9, 1.6)
 	if err != nil {
 		t.Fatalf("renderCoverQuadrant error: %v", err)
 	}
@@ -52,5 +52,12 @@ func TestRenderPlaceholderCover(t *testing.T) {
 	lines := renderPlaceholderCover()
 	if len(lines) != 9 {
 		t.Errorf("expected 9 placeholder lines, got %d", len(lines))
+	}
+}
+
+func TestDetectCellAspect(t *testing.T) {
+	aspect := detectCellAspect()
+	if aspect < 1.0 || aspect > 3.0 {
+		t.Errorf("expected reasonable cell aspect ratio between 1.0 and 3.0, got %f", aspect)
 	}
 }
