@@ -21,8 +21,8 @@ High-performance, pure Go virtual Squeezebox / Logitech Media Server (LMS) audio
 - **LMS UDP Auto-Discovery**: Automatically locates Logitech Media Server instances on the local network (IPv4 UDP broadcast `e/E` probe).
 - **Intelligent AutoSync**: Automatically queries LMS via JSON-RPC to slave the virtual VU player to any currently playing physical player in the house, following playlist changes and room migrations dynamically.
 - **Rich Terminal UI (`slimvu`)**:
-  - Real-time 60 FPS stereo RMS decibel meter with smooth peak-hold decay.
-  - Full-color album cover art thumbnail rendered via 2×2 Unicode quadrant sub-pixel clustering with terminal cell aspect ratio compensation.
+  - Real-time 60 FPS stereo RMS decibel meter with smooth peak-hold decay and 8× sub-pixel block resolution (`▏` through `█`).
+  - Full-color album cover art thumbnail rendered via 2×2 Unicode quadrant sub-pixel clustering with automatic terminal cell aspect ratio compensation.
   - Live metadata tracking (`Artist · Album · Title`, elapsed/total duration, track number) with marquee scrolling.
 
 ## Used By
@@ -55,10 +55,20 @@ slimvu
 Usage of slimvu:
   -server string
         LMS server host or IP (leave empty for UDP auto-discovery)
+  -port int
+        SlimProto port (default 3483 / auto-discovered)
+  -rpc int
+        JSON-RPC port (default 9000 / auto-discovered)
+  -name string
+        Squeezebox virtual player name (default "SlimVU")
+  -mac string
+        Player MAC address (default "auto")
   -sync
         Automatically sync to active player (default true)
   -cover
-        Display album cover art thumbnail (default true)
+        Display album cover art thumbnail (auto-detected by default)
+  -cell-aspect float
+        Terminal character cell aspect ratio Height/Width (0.0 for auto-detect)
   -fps int
         UI refresh rate in FPS (default 60)
   -hold int
@@ -69,6 +79,8 @@ Usage of slimvu:
         Minimum decibel level for scale (default -60)
   -max-db float
         Maximum decibel level for scale (default 0)
+  -log string
+        File path to write debug/info logs (disabled by default)
 ```
 
 ## Library Quick Start
@@ -108,7 +120,12 @@ func main() {
 	for range ticker.C {
 		leftDB, rightDB, isPlaying := provider.GetLevels()
 		if isPlaying {
-			fmt.Printf("L: %6.1f dB | R: %6.1f dB\n", leftDB, rightDB)
+			track, hasTrack := provider.GetTrackInfo()
+			if hasTrack {
+				fmt.Printf("[%s - %s] L: %6.1f dB | R: %6.1f dB\n", track.Artist, track.Title, leftDB, rightDB)
+			} else {
+				fmt.Printf("L: %6.1f dB | R: %6.1f dB\n", leftDB, rightDB)
+			}
 		}
 	}
 }
