@@ -125,7 +125,7 @@ func main() {
 
 		prefix := ""
 		if track, ok := provider.GetTrackInfo(); ok {
-			prefix = fmt.Sprintf("[%s - %s] ", track.Artist, track.Title)
+			prefix = fmt.Sprintf("[%s - %s]: ", track.Artist, track.Title)
 		}
 
 		fmt.Printf("%sL: %6.1f dB | R: %6.1f dB\n", prefix, leftDB, rightDB)
