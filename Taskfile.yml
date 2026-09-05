@@ -14,6 +14,8 @@ tasks:
   install:
     desc: Install slimvu CLI executable to GOBIN / $GOPATH/bin
     cmds:
+      - task: test
+      - task: build
       - go install ./cmd/slimvu
 
   test:
