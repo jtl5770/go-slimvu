@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -250,17 +251,29 @@ type LMSClient struct {
 	httpClient *http.Client
 }
 
-// NewLMSClient creates an LMS JSON-RPC client.
+// NewLMSClient creates an LMS JSON-RPC client configured with TCP keep-alive connection pooling.
 func NewLMSClient(host string, port int) *LMSClient {
 	if port <= 0 {
 		port = 9000
 	}
+	transport := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   3 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:        20,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+		DisableKeepAlives:   false,
+	}
+
 	return &LMSClient{
 		host:     host,
 		port:     port,
 		endpoint: fmt.Sprintf("http://%s:%d/jsonrpc.js", host, port),
 		httpClient: &http.Client{
-			Timeout: 5 * time.Second,
+			Transport: transport,
+			Timeout:   5 * time.Second,
 		},
 	}
 }
@@ -287,7 +300,10 @@ func (c *LMSClient) call(ctx context.Context, playerID string, command []interfa
 	if err != nil {
 		return fmt.Errorf("do json-rpc req: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -395,7 +411,10 @@ func (c *LMSClient) GetArtwork(ctx context.Context, artworkURL, coverID, playerM
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("artwork fetch HTTP %d", resp.StatusCode)

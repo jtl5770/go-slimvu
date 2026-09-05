@@ -35,7 +35,8 @@ import (
 
 var (
 	scaleTickDBs = [...]float64{-60, -48, -36, -24, -18, -12, -6, -3, 0}
-	subBlocks    = [9]string{"", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"}
+	subBlocks    = [9]string{"", "\u258f", "\u258e", "\u258d", "\u258c", "\u258b", "\u258a", "\u2589", "\u2588"}
+	scaleCache   [128]string
 )
 
 type colorRGB struct {
@@ -50,10 +51,81 @@ func (c colorRGB) BoldString() string {
 	return fmt.Sprintf("\x1b[1;38;2;%d;%d;%dm", c.r, c.g, c.b)
 }
 
+type meterColorEntry struct {
+	color   colorRGB
+	str     string
+	boldStr string
+}
+
+var meterColorLUT [256]meterColorEntry
+
+var (
+	styleBarLabel       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ECEFF4"))
+	styleBarVal         = lipgloss.NewStyle().Foreground(lipgloss.Color("#D8DEE9"))
+	styleScale          = lipgloss.NewStyle().Foreground(lipgloss.Color("#4C566A"))
+	styleTrackIcon      = lipgloss.NewStyle().Foreground(lipgloss.Color("#88C0D0"))
+	styleTrackTitle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#ECEFF4")).Bold(true)
+	styleTrackBadge     = lipgloss.NewStyle().Foreground(lipgloss.Color("#81A1C1"))
+	styleCoverBorder    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#4C566A")).MarginRight(2)
+	styleCoverLabel     = lipgloss.NewStyle().Foreground(lipgloss.Color("#4C566A")).Bold(true)
+	styleHeaderTitle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#88C0D0"))
+	styleStatusPlaying  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00E676"))
+	styleStatusIdle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#4C566A"))
+	styleSynced         = lipgloss.NewStyle().Foreground(lipgloss.Color("#EBCB8B")).Bold(true)
+	styleHelp           = lipgloss.NewStyle().Foreground(lipgloss.Color("#4C566A"))
+	styleAutoSyncActive = lipgloss.NewStyle().Foreground(lipgloss.Color("#00E676")).Bold(true)
+	styleVuMargin       = lipgloss.NewStyle().MarginTop(1)
+	styleContainer      = lipgloss.NewStyle().MarginLeft(1).MarginTop(1)
+	styleSep            = styleHelp.Render(" • ")
+
+	renderedLabelL        = styleBarLabel.Render("L")
+	renderedLabelR        = styleBarLabel.Render("R")
+	renderedValInf        = styleBarVal.Render(" -inf  dB")
+	renderedStatusPlaying = styleStatusPlaying.Render("● PLAYING")
+	renderedStatusIdle    = styleStatusIdle.Render("■ IDLE")
+
+	renderedFooterAutoSyncOn  = buildStaticFooter(true)
+	renderedFooterAutoSyncOff = buildStaticFooter(false)
+)
+
+func buildStaticFooter(autoSync bool) string {
+	var iconStr string
+	if autoSync {
+		iconStr = styleAutoSyncActive.Render("⇆")
+	} else {
+		iconStr = styleHelp.Render("⇆")
+	}
+	autoSyncItem := fmt.Sprintf("%s %s", styleHelp.Render("[a] Auto sync"), iconStr)
+
+	return fmt.Sprintf("%s%s%s%s%s%s%s%s%s",
+		styleHelp.Render("[Space] Play/Pause"),
+		styleSep,
+		styleHelp.Render("[←/→] Prev/Next"),
+		styleSep,
+		styleHelp.Render("[s] Sync to..."),
+		styleSep,
+		autoSyncItem,
+		styleSep,
+		styleHelp.Render("[q] Quit"),
+	)
+}
+
+func init() {
+	for i := 0; i < 256; i++ {
+		t := float64(i) / 255.0
+		c := computeMeterColor(t)
+		meterColorLUT[i] = meterColorEntry{
+			color:   c,
+			str:     c.String(),
+			boldStr: c.BoldString(),
+		}
+	}
+}
+
 type peakInfo struct {
 	position  float64
 	holdUntil time.Time
-	color     colorRGB
+	boldStr   string
 }
 
 type artworkLoadedMsg struct {
@@ -87,8 +159,13 @@ type model struct {
 	track      slimvu.TrackInfo
 	hasTrack   bool
 
+	cachedTrackKey   string
+	cachedRawTitle   string
+	cachedTitleRunes []rune
+
 	artworkKey string
 	coverLines []string
+	coverBlock string
 
 	popup syncPopup
 
@@ -125,7 +202,7 @@ func sendPlayerCommand(cmd func(context.Context) error) tea.Cmd {
 	}
 }
 
-func getMeterColor(t float64) colorRGB {
+func computeMeterColor(t float64) colorRGB {
 	if t < 0 {
 		t = 0
 	} else if t > 1 {
@@ -161,6 +238,20 @@ func getMeterColor(t float64) colorRGB {
 	}
 }
 
+func getMeterColorEntry(t float64) meterColorEntry {
+	if t <= 0 {
+		return meterColorLUT[0]
+	}
+	if t >= 1 {
+		return meterColorLUT[255]
+	}
+	idx := int(t * 255.0)
+	if idx > 255 {
+		idx = 255
+	}
+	return meterColorLUT[idx]
+}
+
 func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64, fps int, holdTime time.Duration, decayRate float64, showCover bool, cellAspect float64) model {
 	if cellAspect <= 0 {
 		cellAspect = detectCellAspect()
@@ -190,8 +281,18 @@ func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64
 	}
 }
 
+func (m model) currentFPS() int {
+	if !m.playing && !m.popup.IsVisible() {
+		if m.fps < 10 {
+			return m.fps
+		}
+		return 10
+	}
+	return m.fps
+}
+
 func (m model) Init() tea.Cmd {
-	return tickCmd(m.fps)
+	return tickCmd(m.currentFPS())
 }
 
 func (m model) getCoverCols() int {
@@ -200,6 +301,14 @@ func (m model) getCoverCols() int {
 		cols = 8
 	}
 	return cols
+}
+
+func (m *model) updateCoverBlock() {
+	if len(m.coverLines) == 0 {
+		m.coverBlock = ""
+		return
+	}
+	m.coverBlock = styleCoverBorder.Render(strings.Join(m.coverLines, "\n"))
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -265,6 +374,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.coverLines = renderPlaceholderCover(cols)
 			}
+			m.updateCoverBlock()
 		}
 		return m, nil
 
@@ -273,7 +383,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		now := time.Time(msg)
 		dt := now.Sub(m.lastUpdate).Seconds()
 		if dt <= 0 || dt > 1.0 {
-			dt = 1.0 / float64(m.fps)
+			dt = 1.0 / float64(m.currentFPS())
 		}
 		m.lastUpdate = now
 
@@ -281,6 +391,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncedMAC, m.syncedName = m.provider.SyncedWith()
 		m.autoSync = m.provider.GetAutoSync()
 		m.track, m.hasTrack = m.provider.GetTrackInfo()
+
+		if m.hasTrack {
+			trackKey := fmt.Sprintf("%s|%s|%s", m.track.Artist, m.track.Album, m.track.Title)
+			if trackKey != m.cachedTrackKey || m.cachedTitleRunes == nil {
+				m.cachedTrackKey = trackKey
+				var titleParts []string
+				if m.track.Artist != "" {
+					titleParts = append(titleParts, m.track.Artist)
+				}
+				if m.track.Album != "" {
+					titleParts = append(titleParts, m.track.Album)
+				}
+				if m.track.Title != "" {
+					titleParts = append(titleParts, m.track.Title)
+				}
+				m.cachedRawTitle = strings.Join(titleParts, " · ")
+				m.cachedTitleRunes = []rune(m.cachedRawTitle)
+			}
+		} else {
+			m.cachedTrackKey = ""
+			m.cachedRawTitle = ""
+			m.cachedTitleRunes = nil
+		}
 
 		if m.popup.IsVisible() {
 			m.popup.SetPlayers(m.provider.GetAllPlayers())
@@ -295,21 +428,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					artworkCmd = fetchArtworkCmd(m.provider, m.track.ArtworkURL, m.track.CoverID, newKey)
 				} else {
 					m.coverLines = renderPlaceholderCover(m.getCoverCols())
+					m.updateCoverBlock()
 				}
 			}
 		} else if !m.hasTrack {
 			m.artworkKey = ""
 			m.coverLines = nil
+			m.coverBlock = ""
 		}
 
 		barLen := m.getBarLength()
 		m.updatePeak(&m.peakLeft, m.leftDB, barLen, dt, now)
 		m.updatePeak(&m.peakRight, m.rightDB, barLen, dt, now)
 
+		nextTick := tickCmd(m.currentFPS())
 		if artworkCmd != nil {
-			return m, tea.Batch(tickCmd(m.fps), artworkCmd)
+			return m, tea.Batch(nextTick, artworkCmd)
 		}
-		return m, tickCmd(m.fps)
+		return m, nextTick
 	}
 
 	return m, nil
@@ -346,7 +482,7 @@ func (m *model) updatePeak(peak *peakInfo, db float64, barLen int, dt float64, n
 		peak.holdUntil = now.Add(m.holdTime)
 
 		t := targetPeak / float64(barLen)
-		peak.color = getMeterColor(t)
+		peak.boldStr = getMeterColorEntry(t).boldStr
 	} else {
 		if now.After(peak.holdUntil) && dt > 0 {
 			peak.position -= m.decayRate * dt
@@ -382,22 +518,29 @@ func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) st
 	}
 
 	var sb strings.Builder
-	sb.Grow(barLen * 24)
+	sb.Grow(barLen*24 + 48)
+
+	if label == "L" {
+		sb.WriteString(renderedLabelL)
+	} else {
+		sb.WriteString(renderedLabelR)
+	}
+	sb.WriteString("  ")
 
 	for i := 0; i < barLen; i++ {
 		t := float64(i) / float64(barLen-1)
-		col := getMeterColor(t)
+		col := getMeterColorEntry(t)
 		isPeak := (i == peakCell)
 
 		if float64(i+1) <= barPos {
 			// Fully lit cell
 			if isPeak {
-				sb.WriteString(peak.color.BoldString())
-				sb.WriteString("█")
+				sb.WriteString(peak.boldStr)
+				sb.WriteString("\u2588")
 				sb.WriteString(ansiReset)
 			} else {
-				sb.WriteString(col.String())
-				sb.WriteString("█")
+				sb.WriteString(col.str)
+				sb.WriteString("\u2588")
 				sb.WriteString(ansiReset)
 			}
 		} else if float64(i) < barPos {
@@ -409,23 +552,23 @@ func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) st
 			}
 
 			if isPeak {
-				sb.WriteString(peak.color.BoldString())
+				sb.WriteString(peak.boldStr)
 				if subIdx <= 0 {
-					sb.WriteString("▏")
+					sb.WriteString("\u258f")
 				} else {
 					sb.WriteString(subBlocks[subIdx])
 				}
 				sb.WriteString(ansiReset)
 			} else if subIdx <= 0 {
 				sb.WriteString(ansiOff)
-				sb.WriteString("░")
+				sb.WriteString("\u2591")
 				sb.WriteString(ansiReset)
 			} else if subIdx == 8 {
-				sb.WriteString(col.String())
-				sb.WriteString("█")
+				sb.WriteString(col.str)
+				sb.WriteString("\u2588")
 				sb.WriteString(ansiReset)
 			} else {
-				sb.WriteString(col.String())
+				sb.WriteString(col.str)
 				sb.WriteString(subBlocks[subIdx])
 				sb.WriteString(ansiReset)
 			}
@@ -434,61 +577,61 @@ func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) st
 			if isPeak {
 				// Floating peak needle positioned at sub-pixel accuracy
 				frac := peak.position - float64(i)
-				sb.WriteString(peak.color.BoldString())
+				sb.WriteString(peak.boldStr)
 				if frac < 0.25 {
-					sb.WriteString("▏")
+					sb.WriteString("\u258f")
 				} else if frac < 0.50 {
-					sb.WriteString("▎")
+					sb.WriteString("\u258e")
 				} else if frac < 0.75 {
-					sb.WriteString("▌")
+					sb.WriteString("\u258c")
 				} else {
-					sb.WriteString("▕")
+					sb.WriteString("\u2595")
 				}
 				sb.WriteString(ansiReset)
 			} else {
 				sb.WriteString(ansiOff)
-				sb.WriteString("░")
+				sb.WriteString("\u2591")
 				sb.WriteString(ansiReset)
 			}
 		}
 	}
 
-	dbStr := ""
+	sb.WriteString(" ")
 	if !m.playing || db <= m.minDB {
-		dbStr = " -inf  dB"
+		sb.WriteString(renderedValInf)
 	} else {
-		dbStr = fmt.Sprintf("%6.1f dB", db)
+		sb.WriteString(styleBarVal.Render(fmt.Sprintf("%6.1f dB", db)))
 	}
 
-	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ECEFF4"))
-	valStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#D8DEE9"))
-
-	return fmt.Sprintf("%s  %s %s",
-		labelStyle.Render(label),
-		sb.String(),
-		valStyle.Render(dbStr),
-	)
+	return sb.String()
 }
 
-func (m model) renderScale(barLen int) string {
+func renderScale(barLen int, minDB, maxDB float64) string {
+	if barLen >= 0 && barLen < len(scaleCache) && scaleCache[barLen] != "" {
+		return scaleCache[barLen]
+	}
+
 	scaleLine := make([]byte, barLen)
 	for i := range scaleLine {
 		scaleLine[i] = ' '
 	}
 
 	for _, db := range scaleTickDBs {
-		if db < m.minDB || db > m.maxDB {
+		if db < minDB || db > maxDB {
 			continue
 		}
-		pos := int(math.Round(((db - m.minDB) / (m.maxDB - m.minDB)) * float64(barLen-1)))
+		pos := int(math.Round(((db - minDB) / (maxDB - minDB)) * float64(barLen-1)))
 		if pos >= 0 && pos < barLen {
 			scaleLine[pos] = '|'
 		}
 	}
 
-	scaleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#4C566A"))
 	indent := strings.Repeat(" ", 3) // "L  " = 3
-	return indent + scaleStyle.Render(string(scaleLine))
+	res := indent + styleScale.Render(string(scaleLine))
+	if barLen >= 0 && barLen < len(scaleCache) {
+		scaleCache[barLen] = res
+	}
+	return res
 }
 
 func formatFixedDuration(sec float64, hasHours bool) string {
@@ -542,18 +685,6 @@ func (m model) renderTrackInfo(totalWidth int) string {
 	rightBadge := strings.TrimSpace(trackParts + "  " + timeParts)
 	rightBadgeLen := len([]rune(rightBadge))
 
-	var titleParts []string
-	if m.track.Artist != "" {
-		titleParts = append(titleParts, m.track.Artist)
-	}
-	if m.track.Album != "" {
-		titleParts = append(titleParts, m.track.Album)
-	}
-	if m.track.Title != "" {
-		titleParts = append(titleParts, m.track.Title)
-	}
-	rawTitle := strings.Join(titleParts, " · ")
-
 	icon := "♫ "
 	iconLen := 2
 	availWidth := totalWidth - rightBadgeLen - iconLen - 2
@@ -561,12 +692,12 @@ func (m model) renderTrackInfo(totalWidth int) string {
 		availWidth = 10
 	}
 
-	runes := []rune(rawTitle)
-	displayTitle := rawTitle
+	runes := m.cachedTitleRunes
+	var displayTitle string
 	if len(runes) > availWidth {
 		sep := "   •••   "
 		fullRunes := append(runes, []rune(sep)...)
-		scrollOffset := (m.tickCount / 12) % len(fullRunes)
+		scrollOffset := (m.tickCount / 6) % len(fullRunes)
 
 		var looped []rune
 		for i := 0; i < availWidth; i++ {
@@ -574,6 +705,8 @@ func (m model) renderTrackInfo(totalWidth int) string {
 			looped = append(looped, fullRunes[idx])
 		}
 		displayTitle = string(looped)
+	} else {
+		displayTitle = m.cachedRawTitle
 	}
 
 	displayLen := len([]rune(displayTitle))
@@ -582,15 +715,11 @@ func (m model) renderTrackInfo(totalWidth int) string {
 		spacing = 1
 	}
 
-	iconStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#88C0D0"))
-	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#ECEFF4")).Bold(true)
-	badgeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#81A1C1"))
-
 	return fmt.Sprintf("%s%s%s%s",
-		iconStyle.Render(icon),
-		titleStyle.Render(displayTitle),
+		styleTrackIcon.Render(icon),
+		styleTrackTitle.Render(displayTitle),
 		strings.Repeat(" ", spacing),
-		badgeStyle.Render(rightBadge),
+		styleTrackBadge.Render(rightBadge),
 	)
 }
 
@@ -599,80 +728,52 @@ func (m model) renderCoverArt() string {
 		return ""
 	}
 
+	if m.coverBlock != "" {
+		return m.coverBlock
+	}
+
 	lines := m.coverLines
 	if len(lines) == 0 {
 		lines = renderPlaceholderCover(m.getCoverCols())
 	}
 
-	var sb strings.Builder
-	for i, line := range lines {
-		sb.WriteString(line)
-		if i < len(lines)-1 {
-			sb.WriteString("\n")
-		}
-	}
-
-	borderStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#4C566A")).
-		MarginRight(2)
-
-	return borderStyle.Render(sb.String())
+	return styleCoverBorder.Render(strings.Join(lines, "\n"))
 }
 
 func (m model) View() string {
 	barLen := m.getBarLength()
 	totalWidth := barLen + 13
 
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("#88C0D0"))
-
-	statusStyle := lipgloss.NewStyle().Bold(true)
 	var statusStr string
 	if m.playing {
-		statusStr = statusStyle.Foreground(lipgloss.Color("#00E676")).Render("● PLAYING")
+		statusStr = renderedStatusPlaying
 	} else {
-		statusStr = statusStyle.Foreground(lipgloss.Color("#4C566A")).Render("■ IDLE")
+		statusStr = renderedStatusIdle
 	}
 
-	syncedInfo := ""
+	var header string
 	if m.syncedName != "" {
-		syncedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#EBCB8B")).Bold(true)
-		syncedInfo = fmt.Sprintf("  •  Synced to: %s", syncedStyle.Render(m.syncedName))
+		syncedStr := styleSynced.Render(m.syncedName)
+		header = styleHeaderTitle.Render(fmt.Sprintf("Squeezebox Stereo VU Meter — %s  •  Synced to: %s", statusStr, syncedStr))
 	} else if m.syncedMAC != "" {
-		syncedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#EBCB8B")).Bold(true)
-		syncedInfo = fmt.Sprintf("  •  Synced to: %s", syncedStyle.Render(m.syncedMAC))
+		syncedStr := styleSynced.Render(m.syncedMAC)
+		header = styleHeaderTitle.Render(fmt.Sprintf("Squeezebox Stereo VU Meter — %s  •  Synced to: %s", statusStr, syncedStr))
+	} else {
+		header = styleHeaderTitle.Render(fmt.Sprintf("Squeezebox Stereo VU Meter — %s", statusStr))
 	}
 
-	header := titleStyle.Render(fmt.Sprintf("Squeezebox Stereo VU Meter — %s%s", statusStr, syncedInfo))
 	trackLine := m.renderTrackInfo(totalWidth)
 
 	leftBar := m.renderBar("L", m.leftDB, m.peakLeft, barLen)
 	rightBar := m.renderBar("R", m.rightDB, m.peakRight, barLen)
-	scale := m.renderScale(barLen)
+	scale := renderScale(barLen, m.minDB, m.maxDB)
 
-	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#4C566A"))
-	var iconStr string
+	var footer string
 	if m.autoSync {
-		iconStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#00E676")).Bold(true).Render("⇄")
+		footer = renderedFooterAutoSyncOn
 	} else {
-		iconStr = helpStyle.Render("⇄")
+		footer = renderedFooterAutoSyncOff
 	}
-	autoSyncItem := fmt.Sprintf("%s %s", helpStyle.Render("[a] Auto sync"), iconStr)
-
-	sep := helpStyle.Render(" • ")
-	footer := fmt.Sprintf("%s%s%s%s%s%s%s%s%s",
-		helpStyle.Render("[Space] Play/Pause"),
-		sep,
-		helpStyle.Render("[←/→] Prev/Next"),
-		sep,
-		helpStyle.Render("[s] Sync to..."),
-		sep,
-		autoSyncItem,
-		sep,
-		helpStyle.Render("[q] Quit"),
-	)
 
 	// The track info line slot is unconditionally rendered to prevent any vertical layout jumping
 	vuContent := fmt.Sprintf("%s\n\n%s\n\n%s\n%s\n%s\n\n%s", header, trackLine, leftBar, rightBar, scale, footer)
@@ -680,14 +781,13 @@ func (m model) View() string {
 	var finalView string
 	if m.showCover {
 		coverBlock := m.renderCoverArt()
-		vuStyled := lipgloss.NewStyle().MarginTop(1).Render(vuContent)
+		vuStyled := styleVuMargin.Render(vuContent)
 		finalView = lipgloss.JoinHorizontal(lipgloss.Top, coverBlock, vuStyled)
 	} else {
 		finalView = vuContent
 	}
 
-	containerStyle := lipgloss.NewStyle().MarginLeft(1).MarginTop(1)
-	rendered := containerStyle.Render(finalView) + "\n"
+	rendered := styleContainer.Render(finalView) + "\n"
 
 	if m.popup.IsVisible() {
 		return m.popup.Overlay(rendered, m.termWidth, m.termHeight, m.autoSync, m.syncedMAC, m.syncedName, m.tickCount)
@@ -707,7 +807,7 @@ func main() {
 	autoSync := flag.Bool("sync", true, "Automatically sync to active player")
 	minDB := flag.Float64("min-db", -60.0, "Minimum decibel level for scale")
 	maxDB := flag.Float64("max-db", 0.0, "Maximum decibel level for scale")
-	fps := flag.Int("fps", 60, "UI refresh rate (FPS)")
+	fps := flag.Int("fps", 30, "UI refresh rate (FPS)")
 	holdMS := flag.Int("hold", 250, "Peak hold time in milliseconds")
 	decay := flag.Float64("decay", 20.0, "Peak decay rate (blocks/sec)")
 	cover := flag.Bool("cover", defaultCover, "Display album cover art thumbnail (auto-detected by default)")

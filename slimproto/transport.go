@@ -168,6 +168,7 @@ func (t *TCPTransport) readLoop(initialConn net.Conn) {
 
 	conn := initialConn
 	lenBuf := make([]byte, 2)
+	frameBuf := make([]byte, 65536) // SlimProto 16-bit uint16 max frame is 65535 bytes
 	var dialer net.Dialer
 
 	for t.isRunning() {
@@ -241,8 +242,8 @@ func (t *TCPTransport) readLoop(initialConn net.Conn) {
 			continue
 		}
 
-		frameBuf := make([]byte, totalLen)
-		if _, err := io.ReadFull(conn, frameBuf); err != nil {
+		payloadBuf := frameBuf[:totalLen]
+		if _, err := io.ReadFull(conn, payloadBuf); err != nil {
 			if !t.isRunning() {
 				return
 			}
@@ -250,8 +251,8 @@ func (t *TCPTransport) readLoop(initialConn net.Conn) {
 			continue
 		}
 
-		cmd := string(frameBuf[0:4])
-		payload := frameBuf[4:]
+		cmd := string(payloadBuf[0:4])
+		payload := payloadBuf[4:]
 
 		if t.handler != nil {
 			t.handler.HandleCommand(cmd, payload)
