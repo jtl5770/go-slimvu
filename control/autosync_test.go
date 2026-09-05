@@ -143,6 +143,7 @@ func TestAutoSyncManager_SwitchFromPausedToNewPlayer(t *testing.T) {
 
 	player1Mode := "play"
 	player2Mode := "stop"
+	ourMaster := ""
 
 	syncedTargets := make([]string, 0)
 
@@ -180,6 +181,18 @@ func TestAutoSyncManager_SwitchFromPausedToNewPlayer(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(JSONRPCResponse{Result: data})
 
 		case "status":
+			if player == ourMAC {
+				resp := map[string]interface{}{
+					"playerid":    ourMAC,
+					"player_name": "GoLEDs VU",
+					"mode":        "play",
+					"sync_master": ourMaster,
+				}
+				data, _ := json.Marshal(resp)
+				_ = json.NewEncoder(w).Encode(JSONRPCResponse{Result: data})
+				return
+			}
+
 			mode := "stop"
 			if player == player1MAC {
 				mode = player1Mode
@@ -199,8 +212,11 @@ func TestAutoSyncManager_SwitchFromPausedToNewPlayer(t *testing.T) {
 				cmds := req.Params[1].([]interface{})
 				if len(cmds) > 1 {
 					arg := cmds[1].(string)
-					if arg == ourMAC {
+					if arg == "-" && player == ourMAC {
+						ourMaster = ""
+					} else if arg == ourMAC {
 						syncedTargets = append(syncedTargets, player)
+						ourMaster = player
 					}
 				}
 			}
@@ -250,6 +266,132 @@ func TestAutoSyncManager_SwitchFromPausedToNewPlayer(t *testing.T) {
 	mgr.Stop()
 }
 
+func TestAutoSyncManager_PausedMaster_DoesNotUnsyncWhenNoOtherPlayer(t *testing.T) {
+	var mu sync.Mutex
+	ourMAC := "00:04:20:ee:12:34"
+	player1MAC := "00:04:20:11:11:11"
+
+	player1Mode := "play"
+	ourMaster := ""
+	unsyncCalled := false
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req JSONRPCRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		player := ""
+		if len(req.Params) > 0 {
+			if p, ok := req.Params[0].(string); ok {
+				player = p
+			}
+		}
+
+		var cmd string
+		if len(req.Params) > 1 {
+			if cmds, ok := req.Params[1].([]interface{}); ok && len(cmds) > 0 {
+				cmd = cmds[0].(string)
+			}
+		}
+
+		switch cmd {
+		case "players":
+			resp := map[string]interface{}{
+				"players_loop": []map[string]interface{}{
+					{"playerid": ourMAC, "name": "SlimVU"},
+					{"playerid": player1MAC, "name": "Living Room"},
+				},
+			}
+			data, _ := json.Marshal(resp)
+			_ = json.NewEncoder(w).Encode(JSONRPCResponse{Result: data})
+
+		case "status":
+			if player == ourMAC {
+				resp := map[string]interface{}{
+					"playerid":    ourMAC,
+					"player_name": "SlimVU",
+					"mode":        player1Mode,
+					"sync_master": ourMaster,
+				}
+				data, _ := json.Marshal(resp)
+				_ = json.NewEncoder(w).Encode(JSONRPCResponse{Result: data})
+				return
+			}
+
+			resp := map[string]interface{}{
+				"playerid":    player1MAC,
+				"player_name": "Living Room",
+				"mode":        player1Mode,
+			}
+			data, _ := json.Marshal(resp)
+			_ = json.NewEncoder(w).Encode(JSONRPCResponse{Result: data})
+
+		case "sync":
+			if len(req.Params) > 1 {
+				cmds := req.Params[1].([]interface{})
+				if len(cmds) > 1 {
+					arg := cmds[1].(string)
+					if arg == "-" && player == ourMAC {
+						unsyncCalled = true
+						ourMaster = ""
+					} else if arg == ourMAC {
+						ourMaster = player
+					}
+				}
+			}
+			_ = json.NewEncoder(w).Encode(JSONRPCResponse{})
+		}
+	}))
+	defer ts.Close()
+
+	client := &LMSClient{
+		endpoint:   ts.URL,
+		httpClient: ts.Client(),
+	}
+
+	cfg := Config{
+		OurMAC:       ourMAC,
+		OurName:      "SlimVU",
+		AutoSync:     true,
+		PollInterval: 20 * time.Millisecond,
+	}
+
+	mgr := NewPlayerManager(client, cfg)
+	mgr.Start()
+
+	time.Sleep(60 * time.Millisecond)
+
+	// Verify initially synced to Player 1
+	mac, _ := mgr.SyncedWith()
+	if mac != player1MAC {
+		t.Fatalf("Expected initial sync with Player 1, got %s", mac)
+	}
+
+	// Player 1 pauses and no other player is running
+	mu.Lock()
+	player1Mode = "pause"
+	unsyncCalled = false
+	mu.Unlock()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify we did NOT unsync and remain slaved to Player 1
+	mu.Lock()
+	if unsyncCalled {
+		t.Errorf("Expected player NOT to unsync when master pauses and no other player is active")
+	}
+	mu.Unlock()
+
+	mac, _ = mgr.SyncedWith()
+	if mac != player1MAC {
+		t.Fatalf("Expected to remain synced with Player 1 while paused, got: %s", mac)
+	}
+
+	mgr.Stop()
+}
+
 func TestPlayerManager_AutoSyncFalse_MaintainsManualState(t *testing.T) {
 	var mu sync.Mutex
 	ourMAC := "00:04:20:ee:12:34"
@@ -291,10 +433,10 @@ func TestPlayerManager_AutoSyncFalse_MaintainsManualState(t *testing.T) {
 		case "status":
 			if player == ourMAC {
 				resp := map[string]interface{}{
-					"playerid":    ourMAC,
-					"player_name": "SlimVU",
-					"mode":        "play",
-					"sync_master": physicalMAC,
+					"playerid":      ourMAC,
+					"player_name":   "SlimVU",
+					"mode":          "play",
+					"sync_master":   physicalMAC,
 					"current_title": "Manual Track",
 					"playlist_loop": []map[string]interface{}{
 						{"title": "Manual Track", "artist": "Manual Artist"},
@@ -425,7 +567,8 @@ func TestPlayerManager_SelfMasterGuard(t *testing.T) {
 
 		case "sync":
 			if player == ourMAC && len(req.Params) > 1 {
-				if cmds, ok := req.Params[1].([]interface{}); ok && len(cmds) > 1 && cmds[1] == "-" {
+				cmds := req.Params[1].([]interface{})
+				if len(cmds) > 1 && cmds[1] == "-" {
 					unsyncCalled = true
 				}
 			}
@@ -521,7 +664,8 @@ func TestPlayerManager_SlaveWithSyncSlaves_DoesNotSelfUnsync(t *testing.T) {
 
 		case "sync":
 			if player == ourMAC && len(req.Params) > 1 {
-				if cmds, ok := req.Params[1].([]interface{}); ok && len(cmds) > 1 && cmds[1] == "-" {
+				cmds := req.Params[1].([]interface{})
+				if len(cmds) > 1 && cmds[1] == "-" {
 					unsyncCalled = true
 				}
 			}
@@ -721,5 +865,252 @@ func TestPlayerManager_FilterUserSuppliedCustomMAC(t *testing.T) {
 	}
 	if all[0].PlayerID != physicalOtherMAC {
 		t.Fatalf("Expected external player %s, got: %s", physicalOtherMAC, all[0].PlayerID)
+	}
+}
+
+func TestPlayerManager_ManualSyncAndUnsyncIntent(t *testing.T) {
+	var mu sync.Mutex
+	ourMAC := "00:04:20:ee:12:34"
+	kitchenMAC := "00:04:20:11:22:33"
+	bedroomMAC := "00:04:20:44:55:66"
+
+	syncTarget := ""
+	unsyncCalled := false
+	ourMaster := ""
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req JSONRPCRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		player := ""
+		if len(req.Params) > 0 {
+			if p, ok := req.Params[0].(string); ok {
+				player = p
+			}
+		}
+
+		var cmd string
+		if len(req.Params) > 1 {
+			if cmds, ok := req.Params[1].([]interface{}); ok && len(cmds) > 0 {
+				cmd = cmds[0].(string)
+			}
+		}
+
+		switch cmd {
+		case "players":
+			resp := map[string]interface{}{
+				"players_loop": []map[string]interface{}{
+					{"playerid": ourMAC, "name": "SlimVU"},
+					{"playerid": kitchenMAC, "name": "Kitchen"},
+					{"playerid": bedroomMAC, "name": "Bedroom"},
+				},
+			}
+			data, _ := json.Marshal(resp)
+			_ = json.NewEncoder(w).Encode(JSONRPCResponse{Result: data})
+
+		case "status":
+			if player == ourMAC {
+				resp := map[string]interface{}{
+					"playerid":    ourMAC,
+					"player_name": "SlimVU",
+					"mode":        "play",
+					"sync_master": ourMaster,
+				}
+				data, _ := json.Marshal(resp)
+				_ = json.NewEncoder(w).Encode(JSONRPCResponse{Result: data})
+				return
+			}
+			name := "Bedroom"
+			if player == kitchenMAC {
+				name = "Kitchen"
+			}
+			resp := map[string]interface{}{
+				"playerid":    player,
+				"player_name": name,
+				"mode":        "stop",
+			}
+			data, _ := json.Marshal(resp)
+			_ = json.NewEncoder(w).Encode(JSONRPCResponse{Result: data})
+
+		case "sync":
+			if len(req.Params) > 1 {
+				cmds := req.Params[1].([]interface{})
+				if len(cmds) > 1 {
+					arg := cmds[1].(string)
+					if arg == "-" && player == ourMAC {
+						unsyncCalled = true
+						ourMaster = ""
+					} else if arg == ourMAC {
+						syncTarget = player
+						ourMaster = player
+					}
+				}
+			}
+			_ = json.NewEncoder(w).Encode(JSONRPCResponse{})
+		}
+	}))
+	defer ts.Close()
+
+	client := &LMSClient{
+		endpoint:   ts.URL,
+		httpClient: ts.Client(),
+	}
+
+	cfg := Config{
+		OurMAC:       ourMAC,
+		OurName:      "SlimVU",
+		AutoSync:     false,
+		PollInterval: 20 * time.Millisecond,
+	}
+
+	mgr := NewPlayerManager(client, cfg)
+	mgr.Start()
+
+	// 1. Trigger manual sync intent by Name
+	mgr.SyncTo("Kitchen")
+	time.Sleep(60 * time.Millisecond)
+
+	mu.Lock()
+	if syncTarget != kitchenMAC {
+		t.Fatalf("Expected manual SyncTo to sync to Kitchen (%s), got: %s", kitchenMAC, syncTarget)
+	}
+	mu.Unlock()
+
+	mac, name := mgr.SyncedWith()
+	if mac != kitchenMAC || name != "Kitchen" {
+		t.Fatalf("Expected SyncedWith to return (%s, Kitchen), got (%s, %s)", kitchenMAC, mac, name)
+	}
+
+	// 2. Trigger manual Unsync intent
+	mgr.Unsync()
+	time.Sleep(60 * time.Millisecond)
+
+	mu.Lock()
+	if !unsyncCalled {
+		t.Fatalf("Expected Unsync to call LMS unsync")
+	}
+	mu.Unlock()
+
+	mac, name = mgr.SyncedWith()
+	if mac != "" || name != "" {
+		t.Fatalf("Expected SyncedWith to return empty strings after Unsync, got (%s, %s)", mac, name)
+	}
+
+	mgr.Stop()
+}
+
+func TestPlayerManager_ManualSync_NonPlayingRejectedWhenAutoSyncTrue(t *testing.T) {
+	var mu sync.Mutex
+	ourMAC := "00:04:20:ee:12:34"
+	kitchenMAC := "00:04:20:11:22:33"
+	syncCalled := false
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req JSONRPCRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		var cmd string
+		if len(req.Params) > 1 {
+			if cmds, ok := req.Params[1].([]interface{}); ok && len(cmds) > 0 {
+				cmd = cmds[0].(string)
+			}
+		}
+
+		switch cmd {
+		case "players":
+			resp := map[string]interface{}{
+				"players_loop": []map[string]interface{}{
+					{"playerid": ourMAC, "name": "SlimVU"},
+					{"playerid": kitchenMAC, "name": "Kitchen"},
+				},
+			}
+			data, _ := json.Marshal(resp)
+			_ = json.NewEncoder(w).Encode(JSONRPCResponse{Result: data})
+
+		case "status":
+			resp := map[string]interface{}{
+				"playerid":    kitchenMAC,
+				"player_name": "Kitchen",
+				"mode":        "pause", // NOT playing!
+			}
+			data, _ := json.Marshal(resp)
+			_ = json.NewEncoder(w).Encode(JSONRPCResponse{Result: data})
+
+		case "sync":
+			syncCalled = true
+			_ = json.NewEncoder(w).Encode(JSONRPCResponse{})
+		}
+	}))
+	defer ts.Close()
+
+	client := &LMSClient{
+		endpoint:   ts.URL,
+		httpClient: ts.Client(),
+	}
+
+	cfg := Config{
+		OurMAC:       ourMAC,
+		OurName:      "SlimVU",
+		AutoSync:     true, // AutoSync is ACTIVE
+		PollInterval: 20 * time.Millisecond,
+	}
+
+	mgr := NewPlayerManager(client, cfg)
+	mgr.Start()
+
+	// Try to manually sync to paused Kitchen when AutoSync is true
+	mgr.SyncTo("Kitchen")
+	time.Sleep(60 * time.Millisecond)
+
+	mu.Lock()
+	if syncCalled {
+		t.Errorf("Expected manual sync to non-playing room to be rejected when AutoSync is true")
+	}
+	mu.Unlock()
+
+	mgr.Stop()
+}
+
+func TestPlayerManager_DynamicSetAutoSync(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]interface{}{
+			"players_loop": []map[string]interface{}{},
+		}
+		data, _ := json.Marshal(resp)
+		_ = json.NewEncoder(w).Encode(JSONRPCResponse{Result: data})
+	}))
+	defer ts.Close()
+
+	client := &LMSClient{
+		endpoint:   ts.URL,
+		httpClient: ts.Client(),
+	}
+
+	cfg := Config{
+		OurMAC:       "00:04:20:ee:12:34",
+		OurName:      "SlimVU",
+		AutoSync:     true,
+		PollInterval: 100 * time.Millisecond,
+	}
+
+	mgr := NewPlayerManager(client, cfg)
+	if !mgr.GetAutoSync() {
+		t.Errorf("Expected GetAutoSync to return true initially")
+	}
+
+	mgr.SetAutoSync(false)
+	if mgr.GetAutoSync() {
+		t.Errorf("Expected GetAutoSync to return false after SetAutoSync(false)")
+	}
+
+	mgr.SetAutoSync(true)
+	if !mgr.GetAutoSync() {
+		t.Errorf("Expected GetAutoSync to return true after SetAutoSync(true)")
 	}
 }

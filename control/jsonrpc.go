@@ -190,6 +190,58 @@ func (s *PlayerStatus) GetTrackInfo() TrackInfo {
 	return info
 }
 
+// IsPlaying reports whether this player is actively playing audio.
+func (s *PlayerStatus) IsPlaying() bool {
+	return s != nil && s.Mode == "play"
+}
+
+// IsPaused reports whether this player is currently paused.
+func (s *PlayerStatus) IsPaused() bool {
+	return s != nil && s.Mode == "pause"
+}
+
+// IsStopped reports whether this player is stopped.
+func (s *PlayerStatus) IsStopped() bool {
+	return s == nil || s.Mode == "stop" || s.Mode == ""
+}
+
+// IsSyncMaster reports whether this player is leading a sync group
+// (has non-empty sync_slaves and is not slaved to another player).
+func (s *PlayerStatus) IsSyncMaster() bool {
+	if s == nil {
+		return false
+	}
+	cleanSlaves := strings.TrimSpace(s.SyncSlaves)
+	if cleanSlaves == "" || cleanSlaves == "-" {
+		return false
+	}
+	return s.SyncMaster == "" || MatchMAC(s.SyncMaster, s.PlayerID)
+}
+
+// IsSlaved reports whether this player is actively slaved to a master player.
+func (s *PlayerStatus) IsSlaved() bool {
+	if s == nil {
+		return false
+	}
+	return s.SyncMaster != "" && !MatchMAC(s.SyncMaster, s.PlayerID)
+}
+
+// IsStandalone reports whether this player is independent (neither master nor slave).
+func (s *PlayerStatus) IsStandalone() bool {
+	if s == nil {
+		return true
+	}
+	return !s.IsSyncMaster() && !s.IsSlaved()
+}
+
+// Matches reports whether this player matches the given identifier by MAC or Name.
+func (s *PlayerStatus) Matches(identifier string) bool {
+	if s == nil || identifier == "" {
+		return false
+	}
+	return MatchMAC(s.PlayerID, identifier) || strings.EqualFold(s.Name, identifier)
+}
+
 // LMSClient provides methods to query and control LMS via JSON-RPC.
 type LMSClient struct {
 	host       string

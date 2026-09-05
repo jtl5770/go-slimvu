@@ -113,3 +113,42 @@ func TestPlayerStatus_GetTrackInfo_StringTypes(t *testing.T) {
 		t.Errorf("expected duration 210, got %f", info.Duration)
 	}
 }
+
+func TestPlayerStatus_PlaybackPredicates(t *testing.T) {
+	playStatus := &PlayerStatus{Mode: "play"}
+	if !playStatus.IsPlaying() || playStatus.IsPaused() || playStatus.IsStopped() {
+		t.Errorf("expected IsPlaying=true, IsPaused=false, IsStopped=false")
+	}
+
+	pauseStatus := &PlayerStatus{Mode: "pause"}
+	if pauseStatus.IsPlaying() || !pauseStatus.IsPaused() || pauseStatus.IsStopped() {
+		t.Errorf("expected IsPlaying=false, IsPaused=true, IsStopped=false")
+	}
+
+	stopStatus := &PlayerStatus{Mode: "stop"}
+	if stopStatus.IsPlaying() || stopStatus.IsPaused() || !stopStatus.IsStopped() {
+		t.Errorf("expected IsPlaying=false, IsPaused=false, IsStopped=true")
+	}
+
+	var nilStatus *PlayerStatus
+	if nilStatus.IsPlaying() || nilStatus.IsPaused() || !nilStatus.IsStopped() {
+		t.Errorf("expected nil status IsPlaying=false, IsPaused=false, IsStopped=true")
+	}
+}
+
+func TestPlayerStatus_SyncPredicates(t *testing.T) {
+	master := &PlayerStatus{PlayerID: "00:04:20:11:11:11", SyncSlaves: "00:04:20:22:22:22"}
+	if !master.IsSyncMaster() || master.IsSlaved() || master.IsStandalone() {
+		t.Errorf("master player should be IsSyncMaster=true, IsSlaved=false, IsStandalone=false")
+	}
+
+	slave := &PlayerStatus{PlayerID: "00:04:20:22:22:22", SyncMaster: "00:04:20:11:11:11"}
+	if slave.IsSyncMaster() || !slave.IsSlaved() || slave.IsStandalone() {
+		t.Errorf("slave player should be IsSyncMaster=false, IsSlaved=true, IsStandalone=false")
+	}
+
+	standalone := &PlayerStatus{PlayerID: "00:04:20:33:33:33"}
+	if standalone.IsSyncMaster() || standalone.IsSlaved() || !standalone.IsStandalone() {
+		t.Errorf("standalone player should be IsSyncMaster=false, IsSlaved=false, IsStandalone=true")
+	}
+}
