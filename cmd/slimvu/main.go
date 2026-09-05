@@ -83,6 +83,7 @@ type model struct {
 	playing    bool
 	syncedMAC  string
 	syncedName string
+	autoSync   bool
 	track      slimvu.TrackInfo
 	hasTrack   bool
 
@@ -163,6 +164,11 @@ func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64
 		cellAspect = detectCellAspect()
 	}
 
+	autoSync := false
+	if provider != nil {
+		autoSync = provider.GetAutoSync()
+	}
+
 	return model{
 		provider:   provider,
 		minDB:      minDB,
@@ -175,6 +181,7 @@ func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64
 		lastUpdate: time.Now(),
 		leftDB:     minDB,
 		rightDB:    minDB,
+		autoSync:   autoSync,
 		termWidth:  80,
 		termHeight: 24,
 	}
@@ -204,6 +211,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, sendPlayerCommand(m.provider.Next)
 		case "p", "<", "left":
 			return m, sendPlayerCommand(m.provider.Previous)
+		case "a":
+			enabled := !m.provider.GetAutoSync()
+			m.provider.SetAutoSync(enabled)
+			m.autoSync = enabled
+			return m, nil
 		}
 
 	case tea.WindowSizeMsg:
@@ -238,6 +250,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.leftDB, m.rightDB, m.playing = m.provider.GetLevels()
 		m.syncedMAC, m.syncedName = m.provider.SyncedWith()
+		m.autoSync = m.provider.GetAutoSync()
 		m.track, m.hasTrack = m.provider.GetTrackInfo()
 
 		var artworkCmd tea.Cmd
@@ -607,7 +620,24 @@ func (m model) View() string {
 	scale := m.renderScale(barLen)
 
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#4C566A"))
-	footer := helpStyle.Render("[Space] Play/Pause • [n/p or ←/→] Prev/Next • [q] Quit")
+	var iconStr string
+	if m.autoSync {
+		iconStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#00E676")).Bold(true).Render("⇄")
+	} else {
+		iconStr = helpStyle.Render("⇄")
+	}
+	autoSyncItem := fmt.Sprintf("%s %s", helpStyle.Render("[a] Auto sync"), iconStr)
+
+	sep := helpStyle.Render(" • ")
+	footer := fmt.Sprintf("%s%s%s%s%s%s%s",
+		helpStyle.Render("[Space] Play/Pause"),
+		sep,
+		helpStyle.Render("[n/p or ←/→] Prev/Next"),
+		sep,
+		autoSyncItem,
+		sep,
+		helpStyle.Render("[q] Quit"),
+	)
 
 	// The track info line slot is unconditionally rendered to prevent any vertical layout jumping
 	vuContent := fmt.Sprintf("%s\n\n%s\n\n%s\n%s\n%s\n\n%s", header, trackLine, leftBar, rightBar, scale, footer)
