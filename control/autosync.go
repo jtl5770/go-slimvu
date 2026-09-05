@@ -67,9 +67,6 @@ type Config struct {
 	PollInterval   time.Duration // Polling interval (defaults to 1000ms)
 }
 
-// AutoSyncConfig is an alias for Config for backward compatibility.
-type AutoSyncConfig = Config
-
 // LMSClientInterface defines the subset of LMSClient methods used by PlayerManager.
 type LMSClientInterface interface {
 	GetPlayers(ctx context.Context) ([]PlayerInfo, error)
@@ -102,9 +99,6 @@ type PlayerManager struct {
 	pendingIntent   syncIntent
 }
 
-// AutoSyncManager is an alias for PlayerManager for backward compatibility.
-type AutoSyncManager = PlayerManager
-
 // NewPlayerManager creates a new PlayerManager and performs an initial synchronous discovery.
 func NewPlayerManager(client LMSClientInterface, cfg Config) *PlayerManager {
 	if cfg.PollInterval <= 0 {
@@ -123,11 +117,6 @@ func NewPlayerManager(client LMSClientInterface, cfg Config) *PlayerManager {
 	initCancel()
 
 	return m
-}
-
-// NewAutoSyncManager is an alias for NewPlayerManager for backward compatibility.
-func NewAutoSyncManager(client LMSClientInterface, cfg AutoSyncConfig) *PlayerManager {
-	return NewPlayerManager(client, cfg)
 }
 
 // SetAutoSync dynamically enables or disables automatic synchronization to playing players.

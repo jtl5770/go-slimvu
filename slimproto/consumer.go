@@ -35,7 +35,7 @@ type ConsumerCallbacks interface {
 	DeductPauseFrames(frames int64)
 	AddFramesPlayed(frames uint64)
 	IsDecoderDone() bool
-	SendStat(event [4]byte) error
+	SendStat(event StatEvent) error
 }
 
 // PacedConsumerConfig defines configuration for PacedConsumer.
@@ -119,7 +119,7 @@ func (p *PacedConsumer) Step(dt time.Duration) {
 		startAt := p.callbacks.GetStartAt()
 		if nowMs >= startAt || (startAt > nowMs && (startAt-nowMs) > 10000) {
 			p.callbacks.SetState(StateRunning)
-			_ = p.callbacks.SendStat([4]byte{'S', 'T', 'M', 's'})
+			_ = p.callbacks.SendStat(StatEventPlaybackStarted)
 		}
 		p.levels.Set(-100, -100, false)
 		p.frameAccumulator = 0
@@ -156,7 +156,7 @@ func (p *PacedConsumer) Step(dt time.Duration) {
 			if p.callbacks.IsDecoderDone() {
 				slog.Info("SlimProto stream playback finished (underrun at EOF)")
 				p.callbacks.SetState(StateStopped)
-				_ = p.callbacks.SendStat([4]byte{'S', 'T', 'M', 'u'}) // Output underrun (STMu)
+				_ = p.callbacks.SendStat(StatEventOutputUnderrun)
 			}
 			p.levels.Set(-100, -100, false)
 		}

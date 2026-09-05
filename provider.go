@@ -173,11 +173,6 @@ func NewProvider(cfg Config) (*SqueezeboxAudioProvider, error) {
 	}, nil
 }
 
-// NewSqueezeboxAudioProvider is an alias for NewProvider for backward compatibility.
-func NewSqueezeboxAudioProvider(cfg Config) (*SqueezeboxAudioProvider, error) {
-	return NewProvider(cfg)
-}
-
 // GetLevels returns the latest left/right dB levels atomically (0 allocs).
 func (s *SqueezeboxAudioProvider) GetLevels() (leftDB, rightDB float64, playing bool) {
 	return s.levels.Get()

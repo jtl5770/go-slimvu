@@ -33,6 +33,23 @@ var (
 	OpStrm = [4]byte{'s', 't', 'r', 'm'}
 )
 
+// StatEvent represents a 4-byte SlimProto status event code.
+type StatEvent = [4]byte
+
+// Standard SlimProto STAT event codes conforming to Squeezelite/SlimProto protocol
+var (
+	StatEventThresholdLoaded = StatEvent{'S', 'T', 'M', 'l'} // Buffer threshold loaded (STMl)
+	StatEventPlaybackStarted = StatEvent{'S', 'T', 'M', 's'} // Playback started / running (STMs)
+	StatEventHeartbeat       = StatEvent{'S', 'T', 'M', 't'} // Monotonic heartbeat tick (STMt)
+	StatEventFlushAck        = StatEvent{'S', 'T', 'M', 'f'} // Flush / Stop acknowledged (STMf)
+	StatEventStreamConnected = StatEvent{'S', 'T', 'M', 'c'} // Stream connected (STMc)
+	StatEventHeadersReceived = StatEvent{'S', 'T', 'M', 'h'} // HTTP response headers received (STMh)
+	StatEventDecoderDone     = StatEvent{'S', 'T', 'M', 'd'} // Decoder reached EOF (STMd)
+	StatEventPaused          = StatEvent{'S', 'T', 'M', 'p'} // Stream paused (STMp)
+	StatEventResumeAck       = StatEvent{'S', 'T', 'M', 'r'} // Unpause resume acknowledged (STMr)
+	StatEventOutputUnderrun  = StatEvent{'S', 'T', 'M', 'u'} // Output buffer underrun / track end (STMu)
+)
+
 // HeloConfig holds configuration for the initial HELO handshake packet.
 type HeloConfig struct {
 	DeviceID     uint8
@@ -149,7 +166,7 @@ func EncodeResp(header string) []byte {
 // [43..47] elapsed_milliseconds (4 bytes uint32)
 // [47..51] server_timestamp (4 bytes uint32, reflected from LMS strm command)
 // [51..53] error_code (2 bytes uint16, 0)
-func EncodeStat(event [4]byte, streamBufSize uint32, streamBufFullness uint32, outBufSize uint32, outBufFullness uint32, bytesReceived uint64, jiffies uint32, elapsedMilliseconds uint32, serverTimestamp uint32) []byte {
+func EncodeStat(event StatEvent, streamBufSize uint32, streamBufFullness uint32, outBufSize uint32, outBufFullness uint32, bytesReceived uint64, jiffies uint32, elapsedMilliseconds uint32, serverTimestamp uint32) []byte {
 	payloadLen := 53
 	buf := make([]byte, 8+payloadLen)
 

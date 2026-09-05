@@ -308,12 +308,6 @@ func (c *LMSClient) call(ctx context.Context, playerID string, command []interfa
 	return nil
 }
 
-// SetPlayerName sets the name of the player on LMS.
-func (c *LMSClient) SetPlayerName(ctx context.Context, playerMAC, name string) error {
-	cmd := []interface{}{"name", name}
-	return c.call(ctx, playerMAC, cmd, nil)
-}
-
 // SetPlayerPref sets a player-specific preference on LMS.
 func (c *LMSClient) SetPlayerPref(ctx context.Context, playerMAC, pref, value string) error {
 	cmd := []interface{}{"playerpref", pref, value}
@@ -414,11 +408,6 @@ func (c *LMSClient) GetArtwork(ctx context.Context, artworkURL, coverID, playerM
 func (c *LMSClient) SyncPlayer(ctx context.Context, slaveMAC, masterMAC string) error {
 	cmd := []interface{}{"sync", slaveMAC}
 	return c.call(ctx, masterMAC, cmd, nil)
-}
-
-// SyncPlayers is an alias for SyncPlayer.
-func (c *LMSClient) SyncPlayers(ctx context.Context, masterMAC, slaveMAC string) error {
-	return c.SyncPlayer(ctx, slaveMAC, masterMAC)
 }
 
 // UnsyncPlayer removes a player from any sync group.

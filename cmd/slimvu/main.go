@@ -33,6 +33,11 @@ import (
 	"github.com/jtl5770/go-slimvu"
 )
 
+var (
+	scaleTickDBs = [...]float64{-60, -48, -36, -24, -18, -12, -6, -3, 0}
+	subBlocks    = [9]string{"", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"}
+)
+
 type colorRGB struct {
 	r, g, b uint8
 }
@@ -105,6 +110,15 @@ func fetchArtworkCmd(provider *slimvu.SqueezeboxAudioProvider, artworkURL, cover
 			return artworkLoadedMsg{key: key, data: nil}
 		}
 		return artworkLoadedMsg{key: key, data: data}
+	}
+}
+
+func sendPlayerCommand(cmd func(context.Context) error) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = cmd(ctx)
+		return nil
 	}
 }
 
@@ -185,26 +199,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "esc", "ctrl+c":
 			return m, tea.Quit
 		case " ", "space":
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				defer cancel()
-				_ = m.provider.TogglePause(ctx)
-			}()
-			return m, nil
+			return m, sendPlayerCommand(m.provider.TogglePause)
 		case "n", ">", "right":
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				defer cancel()
-				_ = m.provider.Next(ctx)
-			}()
-			return m, nil
+			return m, sendPlayerCommand(m.provider.Next)
 		case "p", "<", "left":
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				defer cancel()
-				_ = m.provider.Previous(ctx)
-			}()
-			return m, nil
+			return m, sendPlayerCommand(m.provider.Previous)
 		}
 
 	case tea.WindowSizeMsg:
@@ -328,8 +327,6 @@ func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) st
 	level := (clampedDB - m.minDB) / (m.maxDB - m.minDB)
 	barPos := level * float64(barLen)
 
-	subBlocks := [9]string{"", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"}
-
 	peakCell := -1
 	if peak.position >= 0.125 {
 		peakCell = int(peak.position)
@@ -428,13 +425,12 @@ func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) st
 }
 
 func (m model) renderScale(barLen int) string {
-	dBs := []float64{-60, -48, -36, -24, -18, -12, -6, -3, 0}
 	scaleLine := make([]byte, barLen)
 	for i := range scaleLine {
 		scaleLine[i] = ' '
 	}
 
-	for _, db := range dBs {
+	for _, db := range scaleTickDBs {
 		if db < m.minDB || db > m.maxDB {
 			continue
 		}

@@ -31,6 +31,7 @@ const (
 	FormatMP3  StreamFormat = 'm'
 	FormatAAC  StreamFormat = 'a'
 	FormatOGG  StreamFormat = 'o'
+	FormatOpus StreamFormat = 'u'
 )
 
 func (f StreamFormat) String() string {
@@ -45,6 +46,8 @@ func (f StreamFormat) String() string {
 		return "AAC"
 	case FormatOGG:
 		return "OGG"
+	case FormatOpus:
+		return "OPUS"
 	default:
 		return string([]byte{byte(f)})
 	}

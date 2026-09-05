@@ -26,7 +26,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
 )
 
 // PlaybackState represents the player's internal state machine matching Squeezelite.
@@ -205,14 +204,14 @@ func (c *Client) OnSampleRateChanged(sr uint32, channels uint32) {
 
 // OnThresholdReached is invoked by Decoders once buffer threshold is loaded.
 func (c *Client) OnThresholdReached() {
-	_ = c.SendStat([4]byte{'S', 'T', 'M', 'l'})
+	_ = c.SendStat(StatEventThresholdLoaded)
 	autoStart := byte(c.autoStart.Load())
 	currentState := c.GetState()
 	if currentState == StateRunning || currentState == StateStartAt {
 		// Continuous / gapless playback: output is already actively consuming
 	} else if autoStart == '1' || autoStart == '3' {
 		c.SetState(StateRunning)
-		_ = c.SendStat([4]byte{'S', 'T', 'M', 's'})
+		_ = c.SendStat(StatEventPlaybackStarted)
 	} else {
 		// autostart == '0' or '2': wait for LMS 'strm u' synchronized unpause
 		c.SetState(StateWaitingStart)
@@ -273,12 +272,12 @@ func (c *Client) Stop() error {
 }
 
 // SendStat sends a 53-byte STAT status packet to LMS with current timing and buffer fullness metrics.
-func (c *Client) SendStat(event [4]byte) error {
+func (c *Client) SendStat(event StatEvent) error {
 	return c.SendStatWithTimestamp(event, 0)
 }
 
 // SendStatWithTimestamp sends a STAT packet echoing LMS's serverTimestamp for round-trip latency tracking.
-func (c *Client) SendStatWithTimestamp(event [4]byte, serverTimestamp uint32) error {
+func (c *Client) SendStatWithTimestamp(event StatEvent, serverTimestamp uint32) error {
 	jiffies := c.clock.NowMonotonicMs()
 	sr := c.GetSampleRate()
 	frames := c.framesPlayed.Load()
@@ -325,7 +324,7 @@ func (c *Client) heartbeatLoop() {
 			if !c.running.Load() {
 				return
 			}
-			_ = c.SendStat([4]byte{'S', 'T', 'M', 't'})
+			_ = c.SendStat(StatEventHeartbeat)
 		}
 	}
 }
@@ -356,7 +355,7 @@ func (c *Client) handleStrm(strm *StrmCommand) {
 		c.currentFormat.Store(uint32(strm.Format))
 		slog.Info("SlimProto received strm command: START",
 			"subCommand", "s",
-			"format", string(strm.Format),
+			"format", StreamFormat(strm.Format).String(),
 			"autostart", string(strm.AutoStart),
 			"thresholdKB", strm.Threshold,
 			"serverIP", strm.ServerIP.String(),
@@ -384,7 +383,7 @@ func (c *Client) handleStrm(strm *StrmCommand) {
 		c.decoderDone.Store(false)
 
 		// Send flush ack (STMf)
-		_ = c.SendStat([4]byte{'S', 'T', 'M', 'f'})
+		_ = c.SendStat(StatEventFlushAck)
 
 		// Normalize HTTP request header
 		header := strm.HTTPHeader
@@ -416,7 +415,7 @@ func (c *Client) handleStrm(strm *StrmCommand) {
 		} else {
 			slog.Info("SlimProto strm: PAUSE stream")
 			c.SetState(StatePaused)
-			_ = c.SendStat([4]byte{'S', 'T', 'M', 'p'})
+			_ = c.SendStat(StatEventPaused)
 		}
 
 	case 'u': // Unpause stream (synchronized group play command)
@@ -427,16 +426,16 @@ func (c *Client) handleStrm(strm *StrmCommand) {
 		}
 		slog.Info("SlimProto strm: UNPAUSE stream (Sync Play)",
 			"startAt_jiffies", startAt,
-			"format", string(activeFmt))
+			"format", StreamFormat(activeFmt).String())
 		c.startAt.Store(startAt)
 
 		// Send resume ack (STMr)
-		_ = c.SendStat([4]byte{'S', 'T', 'M', 'r'})
+		_ = c.SendStat(StatEventResumeAck)
 
 		now := c.clock.NowMonotonicMs()
 		if startAt == 0 || now >= startAt || (startAt > now && (startAt-now) > 10000) {
 			c.SetState(StateRunning)
-			_ = c.SendStat([4]byte{'S', 'T', 'M', 's'})
+			_ = c.SendStat(StatEventPlaybackStarted)
 		} else {
 			c.SetState(StateStartAt)
 		}
@@ -454,7 +453,7 @@ func (c *Client) handleStrm(strm *StrmCommand) {
 		c.ringBuffer.Flush()
 		c.framesPlayed.Store(0)
 		c.SetState(StateStopped)
-		_ = c.SendStat([4]byte{'S', 'T', 'M', 'f'})
+		_ = c.SendStat(StatEventFlushAck)
 
 	case 'f': // Flush buffers
 		slog.Debug("SlimProto strm: FLUSH buffers")
@@ -467,7 +466,7 @@ func (c *Client) handleStrm(strm *StrmCommand) {
 		c.pauseFrames.Store(0)
 		c.ringBuffer.Flush()
 		c.framesPlayed.Store(0)
-		_ = c.SendStat([4]byte{'S', 'T', 'M', 'f'})
+		_ = c.SendStat(StatEventFlushAck)
 
 	case 'a': // Skip ahead
 		skipFrames := uint64(strm.ReplayGain) * uint64(c.GetSampleRate()) / 1000
@@ -486,7 +485,7 @@ func (c *Client) handleStrm(strm *StrmCommand) {
 
 	case 't': // Timestamp tick with latency tracking
 		slog.Debug("SlimProto strm: TICK latency ping", "timestamp", strm.ReplayGain)
-		_ = c.SendStatWithTimestamp([4]byte{'S', 'T', 'M', 't'}, strm.ReplayGain)
+		_ = c.SendStatWithTimestamp(StatEventHeartbeat, strm.ReplayGain)
 	}
 }
 
@@ -499,11 +498,11 @@ func (c *Client) streamDataWorker(ctx context.Context, strm *StrmCommand) {
 	defer meta.Conn.Close()
 
 	// Signal stream connected (STMc) conforming to Squeezelite slimproto.c
-	_ = c.SendStat([4]byte{'S', 'T', 'M', 'c'})
+	_ = c.SendStat(StatEventStreamConnected)
 
 	// Relay full raw HTTP response headers back to LMS via RESP packet
 	_ = c.SendResp(meta.Headers)
-	_ = c.SendStat([4]byte{'S', 'T', 'M', 'h'}) // HTTP headers received (STMh)
+	_ = c.SendStat(StatEventHeadersReceived) // HTTP headers received (STMh)
 
 	// Calculate threshold in bytes
 	threshKB := c.thresholdKB.Load()
@@ -513,18 +512,18 @@ func (c *Client) streamDataWorker(ctx context.Context, strm *StrmCommand) {
 	thresholdBytes := int(threshKB * 1024)
 
 	var decoder Decoder
-	switch strm.Format {
-	case 'f':
+	switch StreamFormat(strm.Format) {
+	case FormatFLAC:
 		decoder = NewFLACDecoder()
-	case 'p':
+	case FormatPCM:
 		decoder = NewPCMDecoder(ParsePCMConfig(strm.PCMSampleRate, strm.PCMSampleSize, strm.PCMChannels, strm.PCMEndianness))
-	case 'm':
+	case FormatMP3:
 		decoder = NewMP3Decoder()
-	case 'a':
+	case FormatAAC:
 		decoder = NewAACDecoder()
-	case 'o':
+	case FormatOGG:
 		decoder = NewVorbisDecoder()
-	case 'u':
+	case FormatOpus:
 		decoder = NewOpusDecoder()
 	default:
 		slog.Warn("SlimProto received stream format, attempting FLAC decoder", "format", string(strm.Format))
@@ -537,6 +536,6 @@ func (c *Client) streamDataWorker(ctx context.Context, strm *StrmCommand) {
 
 	if ctx.Err() == nil {
 		c.decoderDone.Store(true)
-		_ = c.SendStat([4]byte{'S', 'T', 'M', 'd'}) // Decoder done (STMd)
+		_ = c.SendStat(StatEventDecoderDone) // Decoder done (STMd)
 	}
 }

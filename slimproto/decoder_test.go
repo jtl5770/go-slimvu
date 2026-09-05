@@ -344,6 +344,7 @@ func TestStreamFormat_String(t *testing.T) {
 		{FormatMP3, "MP3"},
 		{FormatAAC, "AAC"},
 		{FormatOGG, "OGG"},
+		{FormatOpus, "OPUS"},
 		{StreamFormat('x'), "x"},
 	}
 
