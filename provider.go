@@ -86,6 +86,8 @@ func GeneratePlayerMAC() net.HardwareAddr {
 // NewProvider creates an initialized SqueezeboxAudioProvider.
 // If cfg.Server is empty, it uses modern UDP auto-discovery to locate LMS, ignoring any configured ports.
 // If cfg.Server is specified, it connects to that host and uses the given ports or defaults.
+//
+// Call Start() on the returned provider to initiate audio streaming and player discovery.
 func NewProvider(cfg Config) (*SqueezeboxAudioProvider, error) {
 	var serverHost string
 	var slimProtoPort int
@@ -179,6 +181,8 @@ func (s *SqueezeboxAudioProvider) GetLevels() (leftDB, rightDB float64, playing 
 }
 
 // Start starts the SlimProto client and PlayerManager.
+// Start must be called before querying levels or player status to initiate network streaming
+// and perform the initial player discovery.
 func (s *SqueezeboxAudioProvider) Start() error {
 	if err := s.proto.Start(); err != nil {
 		return fmt.Errorf("start slimproto client: %w", err)

@@ -125,6 +125,27 @@ func TestSqueezeboxAudioProvider_StartStopLifecycle(t *testing.T) {
 }
 
 func TestSqueezeboxAudioProvider_PlayerDiscoveryAndMetadata(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen for mock SlimProto: %v", err)
+	}
+	defer ln.Close()
+
+	tcpAddr := ln.Addr().(*net.TCPAddr)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				buf := make([]byte, 256)
+				_, _ = c.Read(buf)
+			}(conn)
+		}
+	}()
+
 	ourMAC := "00:04:20:ee:88:99"
 	physicalMAC := "00:04:20:77:77:77"
 
@@ -187,18 +208,24 @@ func TestSqueezeboxAudioProvider_PlayerDiscoveryAndMetadata(t *testing.T) {
 	port, _ := strconv.Atoi(u.Port())
 
 	cfg := Config{
-		Server:       u.Hostname(),
-		JSONRPCPort:  port,
-		PlayerMAC:    ourMAC,
-		PlayerName:   "SlimVU",
-		AutoSync:     false,
-		PollInterval: 20 * time.Millisecond,
+		Server:        u.Hostname(),
+		SlimProtoPort: tcpAddr.Port,
+		JSONRPCPort:   port,
+		PlayerMAC:     ourMAC,
+		PlayerName:    "SlimVU",
+		AutoSync:      false,
+		PollInterval:  20 * time.Millisecond,
 	}
 
 	provider, err := NewProvider(cfg)
 	if err != nil {
 		t.Fatalf("Failed to create provider: %v", err)
 	}
+
+	if err := provider.Start(); err != nil {
+		t.Fatalf("Failed to start provider: %v", err)
+	}
+	defer provider.Stop()
 
 	players := provider.GetAllPlayers()
 	if len(players) != 1 || players[0].PlayerID != physicalMAC {

@@ -25,7 +25,8 @@ import (
 type AudioProvider interface {
 	// GetLevels returns the latest left and right dB levels and whether audio is playing.
 	GetLevels() (leftDB, rightDB float64, playing bool)
-	// Start starts the audio provider background worker.
+	// Start starts the audio provider background worker and performs initial server discovery.
+	// Start must be called before querying levels or player state.
 	Start() error
 	// Stop stops the audio provider and gracefully cleans up resources.
 	Stop() error
@@ -34,7 +35,8 @@ type AudioProvider interface {
 // LevelsSnapshot captures an immutable stereo audio measurement.
 type LevelsSnapshot = slimproto.LevelsSnapshot
 
-// AtomicLevels stores instantaneous stereo audio levels using atomic pointer snapshots.
+// AtomicLevels stores instantaneous stereo audio levels using a packed atomic uint64,
+// guaranteeing 100% lock-free, zero-allocation operations on both read and write paths.
 type AtomicLevels = slimproto.AtomicLevels
 
 // NewAtomicLevels creates an initialized AtomicLevels instance with silence (-100 dB).

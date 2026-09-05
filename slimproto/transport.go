@@ -168,6 +168,7 @@ func (t *TCPTransport) readLoop(initialConn net.Conn) {
 
 	conn := initialConn
 	lenBuf := make([]byte, 2)
+	var dialer net.Dialer
 
 	for t.isRunning() {
 		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -197,8 +198,15 @@ func (t *TCPTransport) readLoop(initialConn net.Conn) {
 				if !t.isRunning() {
 					return
 				}
-				newConn, err := net.DialTimeout("tcp", t.serverAddr, 3*time.Second)
+
+				dialCtx, dialCancel := context.WithTimeout(t.ctx, 3*time.Second)
+				newConn, err := dialer.DialContext(dialCtx, "tcp", t.serverAddr)
+				dialCancel()
+
 				if err != nil {
+					if t.ctx != nil && t.ctx.Err() != nil {
+						return
+					}
 					slog.Debug("SlimProto reconnect failed, retrying...", "error", err)
 					continue
 				}

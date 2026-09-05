@@ -84,6 +84,9 @@ type LMSClientInterface interface {
 
 // PlayerManager continuously monitors LMS players, maintains state snapshots,
 // and optionally manages auto-synchronization.
+//
+// Call Start() to perform the initial player discovery and start the background
+// state polling loop.
 type PlayerManager struct {
 	client LMSClientInterface
 	cfg    Config
@@ -99,7 +102,8 @@ type PlayerManager struct {
 	pendingIntent   syncIntent
 }
 
-// NewPlayerManager creates a new PlayerManager and performs an initial synchronous discovery.
+// NewPlayerManager creates a new PlayerManager. It is non-blocking.
+// Call Start() to initiate player discovery and begin background polling.
 func NewPlayerManager(client LMSClientInterface, cfg Config) *PlayerManager {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 1000 * time.Millisecond
@@ -110,12 +114,6 @@ func NewPlayerManager(client LMSClientInterface, cfg Config) *PlayerManager {
 		cfg:    cfg,
 	}
 	m.autoSync.Store(cfg.AutoSync)
-
-	// Perform initial discovery so caller has immediate state access.
-	initCtx, initCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	m.poll(initCtx)
-	initCancel()
-
 	return m
 }
 
@@ -129,9 +127,18 @@ func (m *PlayerManager) GetAutoSync() bool {
 	return m.autoSync.Load()
 }
 
-// Start begins the background polling goroutine.
+// Start performs the initial synchronous discovery poll to populate player state
+// and begins the background polling goroutine.
+//
+// Start must be called before querying player snapshots or issuing playback commands.
 func (m *PlayerManager) Start() {
 	m.ctx, m.cancel = context.WithCancel(context.Background())
+
+	// Perform initial discovery so caller has immediate state access before polling loop runs.
+	initCtx, initCancel := context.WithTimeout(m.ctx, 2*time.Second)
+	m.poll(initCtx)
+	initCancel()
+
 	m.wg.Add(1)
 	go m.pollLoop()
 }
@@ -146,7 +153,9 @@ func (m *PlayerManager) Stop() {
 	if m.autoSync.Load() {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
-		_ = m.client.UnsyncPlayer(ctx, m.cfg.OurMAC)
+		if err := m.client.UnsyncPlayer(ctx, m.cfg.OurMAC); err != nil {
+			slog.Debug("PlayerManager: unsync on stop failed", "error", err)
+		}
 	}
 
 	m.mu.Lock()
@@ -296,7 +305,9 @@ func (m *PlayerManager) syncToPlayer(ctx context.Context, target PlayerStatus) b
 	slog.Info("PlayerManager: syncing to player",
 		"targetName", target.Name, "targetMAC", target.PlayerID)
 
-	_ = m.client.UnsyncPlayer(ctx, m.cfg.OurMAC)
+	if err := m.client.UnsyncPlayer(ctx, m.cfg.OurMAC); err != nil {
+		slog.Debug("PlayerManager: unsync before sync failed", "error", err)
+	}
 	if err := m.client.SyncPlayer(ctx, m.cfg.OurMAC, target.PlayerID); err != nil {
 		slog.Warn("PlayerManager: failed to sync player", "target", target.PlayerID, "error", err)
 		return false
@@ -318,8 +329,12 @@ func (m *PlayerManager) pollLoop() {
 
 	// Configure player sync buffer preferences once at startup
 	initCtx, initCancel := context.WithTimeout(m.ctx, 3*time.Second)
-	_ = m.client.SetPlayerPref(initCtx, m.cfg.OurMAC, "maintainSync", "0")
-	_ = m.client.SetPlayerPref(initCtx, m.cfg.OurMAC, "minSyncAdjust", "5000")
+	if err := m.client.SetPlayerPref(initCtx, m.cfg.OurMAC, "maintainSync", "0"); err != nil {
+		slog.Debug("PlayerManager: failed to set maintainSync pref", "error", err)
+	}
+	if err := m.client.SetPlayerPref(initCtx, m.cfg.OurMAC, "minSyncAdjust", "5000"); err != nil {
+		slog.Debug("PlayerManager: failed to set minSyncAdjust pref", "error", err)
+	}
 	initCancel()
 
 	for {
@@ -372,7 +387,9 @@ func (m *PlayerManager) refreshState(ctx context.Context) (*PlayerStatus, []Play
 	// Self-Master Guard: ensure SlimVU never remains a sync master.
 	if ourStatus != nil && ourStatus.IsSyncMaster() {
 		slog.Warn("PlayerManager: detected our player is sync master, unsyncing immediately", "slaves", ourStatus.SyncSlaves)
-		_ = m.client.UnsyncPlayer(ctx, m.cfg.OurMAC)
+		if err := m.client.UnsyncPlayer(ctx, m.cfg.OurMAC); err != nil {
+			slog.Debug("PlayerManager: self-master unsync failed", "error", err)
+		}
 
 		if status, err := m.client.GetPlayerStatus(ctx, m.cfg.OurMAC); err == nil && status != nil {
 			ourStatus = status
@@ -428,7 +445,9 @@ func (m *PlayerManager) poll(ctx context.Context) {
 	switch intent.kind {
 	case intentUnsync:
 		slog.Info("PlayerManager: executing manual unsync intent")
-		_ = m.client.UnsyncPlayer(ctx, m.cfg.OurMAC)
+		if err := m.client.UnsyncPlayer(ctx, m.cfg.OurMAC); err != nil {
+			slog.Debug("PlayerManager: manual unsync failed", "error", err)
+		}
 		ourStatus, external, _ = m.refreshState(ctx)
 		intentHandled = true
 

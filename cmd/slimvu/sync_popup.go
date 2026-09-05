@@ -24,6 +24,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jtl5770/go-slimvu"
+	"github.com/jtl5770/go-slimvu/control"
 )
 
 const (
@@ -71,15 +72,15 @@ func (p *syncPopup) SetPlayers(players []slimvu.PlayerStatus) {
 	sorted := make([]slimvu.PlayerStatus, len(players))
 	copy(sorted, players)
 	sort.SliceStable(sorted, func(i, j int) bool {
-		nameI := strings.ToLower(sorted[i].Name)
+		nameI := sorted[i].Name
 		if nameI == "" {
-			nameI = strings.ToLower(sorted[i].PlayerID)
+			nameI = sorted[i].PlayerID
 		}
-		nameJ := strings.ToLower(sorted[j].Name)
+		nameJ := sorted[j].Name
 		if nameJ == "" {
-			nameJ = strings.ToLower(sorted[j].PlayerID)
+			nameJ = sorted[j].PlayerID
 		}
-		return nameI < nameJ
+		return strings.ToLower(nameI) < strings.ToLower(nameJ)
 	})
 	p.players = sorted
 
@@ -148,6 +149,43 @@ func isPlayerSelectable(p slimvu.PlayerStatus, autoSync bool) bool {
 		return p.IsPlaying()
 	}
 	return p.IsPlaying() || p.IsPaused()
+}
+
+func formatTrackText(track control.TrackInfo) string {
+	var parts []string
+	if track.Artist != "" {
+		parts = append(parts, track.Artist)
+	}
+	if track.Album != "" {
+		parts = append(parts, track.Album)
+	}
+	if track.Title != "" {
+		parts = append(parts, track.Title)
+	}
+	if len(parts) == 0 {
+		return "No track info"
+	}
+	return strings.Join(parts, " · ")
+}
+
+func renderScrollingOrTruncated(text string, maxW int, scroll bool, tickCount int) string {
+	runes := []rune(text)
+	if len(runes) <= maxW {
+		return text
+	}
+	if scroll {
+		sep := "   •••   "
+		fullRunes := append(runes, []rune(sep)...)
+		scrollOffset := (tickCount / 12) % len(fullRunes)
+
+		var looped []rune
+		for i := 0; i < maxW; i++ {
+			idx := (scrollOffset + i) % len(fullRunes)
+			looped = append(looped, fullRunes[idx])
+		}
+		return string(looped)
+	}
+	return string(runes[:maxW-1]) + "…"
 }
 
 func (p syncPopup) RenderBox(termWidth int, autoSync bool, syncedMAC, syncedName string, tickCount int) string {
@@ -263,6 +301,11 @@ func (p syncPopup) RenderBox(termWidth int, autoSync bool, syncedMAC, syncedName
 				spacesNeeded = 1
 			}
 
+			availTrackW := innerW - 2
+			if availTrackW < 10 {
+				availTrackW = 10
+			}
+
 			var line1 string
 			var line2 string
 
@@ -280,11 +323,6 @@ func (p syncPopup) RenderBox(termWidth int, autoSync bool, syncedMAC, syncedName
 					statusStyle.Render(badgeRendered),
 				)
 
-				availTrackW := innerW - 2
-				if availTrackW < 10 {
-					availTrackW = 10
-				}
-
 				leadStyle := lipgloss.NewStyle().Background(bgCol)
 				trailStyle := lipgloss.NewStyle().Background(bgCol)
 
@@ -300,37 +338,8 @@ func (p syncPopup) RenderBox(termWidth int, autoSync bool, syncedMAC, syncedName
 						trailStyle.Render(strings.Repeat(" ", trailSpaces)),
 					)
 				} else {
-					track := player.GetTrackInfo()
-					var parts []string
-					if track.Artist != "" {
-						parts = append(parts, track.Artist)
-					}
-					if track.Album != "" {
-						parts = append(parts, track.Album)
-					}
-					if track.Title != "" {
-						parts = append(parts, track.Title)
-					}
-					rawTrack := strings.Join(parts, " · ")
-					if rawTrack == "" {
-						rawTrack = "No track info"
-					}
-
-					displayTrack := rawTrack
-					trackRunes := []rune(rawTrack)
-					if len(trackRunes) > availTrackW {
-						sep := "   •••   "
-						fullRunes := append(trackRunes, []rune(sep)...)
-						scrollOffset := (tickCount / 12) % len(fullRunes)
-
-						var looped []rune
-						for i := 0; i < availTrackW; i++ {
-							idx := (scrollOffset + i) % len(fullRunes)
-							looped = append(looped, fullRunes[idx])
-						}
-						displayTrack = string(looped)
-					}
-
+					rawTrack := formatTrackText(player.GetTrackInfo())
+					displayTrack := renderScrollingOrTruncated(rawTrack, availTrackW, true, tickCount)
 					trackStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#81A1C1")).Background(bgCol)
 					trailSpaces := innerW - 2 - lipgloss.Width(displayTrack)
 					if trailSpaces < 0 {
@@ -351,38 +360,12 @@ func (p syncPopup) RenderBox(termWidth int, autoSync bool, syncedMAC, syncedName
 					statusStyle.Render(badgeRendered),
 				)
 
-				availTrackW := innerW - 2
-				if availTrackW < 10 {
-					availTrackW = 10
-				}
-
 				if !selectable {
 					line2 = "  " + helpStyle.Render("Not selectable")
 				} else {
-					track := player.GetTrackInfo()
-					var parts []string
-					if track.Artist != "" {
-						parts = append(parts, track.Artist)
-					}
-					if track.Album != "" {
-						parts = append(parts, track.Album)
-					}
-					if track.Title != "" {
-						parts = append(parts, track.Title)
-					}
-					rawTrack := strings.Join(parts, " · ")
-					if rawTrack == "" {
-						rawTrack = "No track info"
-					}
-
-					displayTrack := rawTrack
-					trackRunes := []rune(rawTrack)
-					if len(trackRunes) > availTrackW {
-						displayTrack = string(trackRunes[:availTrackW-1]) + "…"
-					}
-
-					trackStyle := helpStyle
-					line2 = "  " + trackStyle.Render(displayTrack)
+					rawTrack := formatTrackText(player.GetTrackInfo())
+					displayTrack := renderScrollingOrTruncated(rawTrack, availTrackW, false, tickCount)
+					line2 = "  " + helpStyle.Render(displayTrack)
 				}
 			}
 
