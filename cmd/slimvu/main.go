@@ -90,6 +90,8 @@ type model struct {
 	artworkKey string
 	coverLines []string
 
+	popup syncPopup
+
 	tickCount int
 }
 
@@ -182,6 +184,7 @@ func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64
 		leftDB:     minDB,
 		rightDB:    minDB,
 		autoSync:   autoSync,
+		popup:      newSyncPopup(),
 		termWidth:  80,
 		termHeight: 24,
 	}
@@ -202,9 +205,35 @@ func (m model) getCoverCols() int {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if m.popup.IsVisible() {
+			switch msg.String() {
+			case "esc", "q", "ctrl+c", "s":
+				m.popup.Close()
+				return m, nil
+			case "up", "k":
+				m.popup.MoveUp()
+				return m, nil
+			case "down", "j":
+				m.popup.MoveDown()
+				return m, nil
+			case "enter":
+				if player, ok := m.popup.SelectedPlayer(); ok {
+					if isPlayerSelectable(player, m.autoSync) {
+						m.provider.SyncTo(player.PlayerID)
+						m.popup.Close()
+					}
+				}
+				return m, nil
+			}
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "q", "esc", "ctrl+c":
 			return m, tea.Quit
+		case "s":
+			m.popup.Open(m.provider.GetAllPlayers())
+			return m, nil
 		case " ", "space":
 			return m, sendPlayerCommand(m.provider.TogglePause)
 		case "n", ">", "right":
@@ -252,6 +281,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncedMAC, m.syncedName = m.provider.SyncedWith()
 		m.autoSync = m.provider.GetAutoSync()
 		m.track, m.hasTrack = m.provider.GetTrackInfo()
+
+		if m.popup.IsVisible() {
+			m.popup.SetPlayers(m.provider.GetAllPlayers())
+		}
 
 		var artworkCmd tea.Cmd
 		if m.showCover && m.hasTrack {
@@ -629,10 +662,12 @@ func (m model) View() string {
 	autoSyncItem := fmt.Sprintf("%s %s", helpStyle.Render("[a] Auto sync"), iconStr)
 
 	sep := helpStyle.Render(" • ")
-	footer := fmt.Sprintf("%s%s%s%s%s%s%s",
+	footer := fmt.Sprintf("%s%s%s%s%s%s%s%s%s",
 		helpStyle.Render("[Space] Play/Pause"),
 		sep,
 		helpStyle.Render("[n/p or ←/→] Prev/Next"),
+		sep,
+		helpStyle.Render("[s] Sync to..."),
 		sep,
 		autoSyncItem,
 		sep,
@@ -652,7 +687,13 @@ func (m model) View() string {
 	}
 
 	containerStyle := lipgloss.NewStyle().MarginLeft(1).MarginTop(1)
-	return containerStyle.Render(finalView) + "\n"
+	rendered := containerStyle.Render(finalView) + "\n"
+
+	if m.popup.IsVisible() {
+		return m.popup.Overlay(rendered, m.termWidth, m.termHeight, m.autoSync, m.syncedMAC, m.syncedName, m.tickCount)
+	}
+
+	return rendered
 }
 
 func main() {
