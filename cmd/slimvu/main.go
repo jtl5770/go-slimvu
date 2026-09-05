@@ -236,9 +236,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case " ", "space":
 			return m, sendPlayerCommand(m.provider.TogglePause)
-		case "n", ">", "right":
+		case "right":
 			return m, sendPlayerCommand(m.provider.Next)
-		case "p", "<", "left":
+		case "left":
 			return m, sendPlayerCommand(m.provider.Previous)
 		case "a":
 			enabled := !m.provider.GetAutoSync()
@@ -665,7 +665,7 @@ func (m model) View() string {
 	footer := fmt.Sprintf("%s%s%s%s%s%s%s%s%s",
 		helpStyle.Render("[Space] Play/Pause"),
 		sep,
-		helpStyle.Render("[n/p or ←/→] Prev/Next"),
+		helpStyle.Render("[←/→] Prev/Next"),
 		sep,
 		helpStyle.Render("[s] Sync to..."),
 		sep,
