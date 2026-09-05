@@ -11,6 +11,11 @@ tasks:
     cmds:
       - go build -o bin/slimvu ./cmd/slimvu
 
+  install:
+    desc: Install slimvu CLI executable to GOBIN / $GOPATH/bin
+    cmds:
+      - go install ./cmd/slimvu
+
   test:
     desc: Run unit and integration tests with race detector
     cmds:
