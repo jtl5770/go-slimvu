@@ -49,6 +49,7 @@ type PlayerInfo struct {
 	PlayerID  string `json:"playerid"`
 	Name      string `json:"name"`
 	Model     string `json:"model"`
+	ModelName string `json:"modelname"`
 	IsPlayer  int    `json:"isplayer"`
 	Connected int    `json:"connected"`
 	IP        string `json:"ip"`
@@ -85,6 +86,8 @@ type TrackInfo struct {
 type PlayerStatus struct {
 	PlayerID         string          `json:"playerid"`
 	Name             string          `json:"player_name"`
+	Model            string          `json:"model"`
+	ModelName        string          `json:"modelname"`
 	Mode             string          `json:"mode"`        // "play", "pause", "stop"
 	Power            int             `json:"power"`       // 1 = on, 0 = off
 	Connected        int             `json:"player_connected"`

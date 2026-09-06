@@ -135,17 +135,15 @@ func TestAutoSyncManager_SelfIgnoreAndSync(t *testing.T) {
 	mu.Unlock()
 }
 
-func TestAutoSyncManager_SwitchFromPausedToNewPlayer(t *testing.T) {
+func TestAutoSyncManager_PriorityTiersAndPreemption(t *testing.T) {
 	var mu sync.Mutex
 	ourMAC := "00:04:20:ee:12:34"
 	player1MAC := "00:04:20:11:11:11"
 	player2MAC := "00:04:20:22:22:22"
 
-	player1Mode := "play"
+	player1Mode := "pause"
 	player2Mode := "stop"
 	ourMaster := ""
-
-	syncedTargets := make([]string, 0)
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req JSONRPCRequest
@@ -215,7 +213,6 @@ func TestAutoSyncManager_SwitchFromPausedToNewPlayer(t *testing.T) {
 					if arg == "-" && player == ourMAC {
 						ourMaster = ""
 					} else if arg == ourMAC {
-						syncedTargets = append(syncedTargets, player)
 						ourMaster = player
 					}
 				}
@@ -241,37 +238,46 @@ func TestAutoSyncManager_SwitchFromPausedToNewPlayer(t *testing.T) {
 	mgr := NewPlayerManager(client, cfg)
 	mgr.Start()
 
+	// Tier 4 Fallback: No players are playing, but Player 1 is paused -> syncs to Player 1
 	time.Sleep(60 * time.Millisecond)
-
-	// Step 1: Verify it synced to Player 1 initially
 	mac, _ := mgr.SyncedWith()
 	if mac != player1MAC {
-		t.Fatalf("Expected initial sync with Player 1 (%s), got: %s", player1MAC, mac)
+		t.Fatalf("Expected initial fallback sync with paused Player 1 (%s), got: %s", player1MAC, mac)
 	}
 
-	// Step 2: Pause Player 1, start Player 2
+	// Tier 2 Preemption: Player 2 starts playing -> preempts paused Player 1 and syncs to Player 2
 	mu.Lock()
-	player1Mode = "pause"
 	player2Mode = "play"
 	mu.Unlock()
 
 	time.Sleep(60 * time.Millisecond)
-
-	// Step 3: Verify it switched to Player 2
 	mac, _ = mgr.SyncedWith()
 	if mac != player2MAC {
-		t.Fatalf("Expected AutoSync to switch to Player 2 (%s), got: %s", player2MAC, mac)
+		t.Fatalf("Expected AutoSync to preempt and switch to playing Player 2 (%s), got: %s", player2MAC, mac)
+	}
+
+	// Tier 3 Hysteresis: Player 2 pauses (both Player 1 and Player 2 now paused) -> stays on Player 2
+	mu.Lock()
+	player2Mode = "pause"
+	mu.Unlock()
+
+	time.Sleep(60 * time.Millisecond)
+	mac, _ = mgr.SyncedWith()
+	if mac != player2MAC {
+		t.Fatalf("Expected AutoSync hysteresis to stay on paused Player 2 (%s), got: %s", player2MAC, mac)
 	}
 
 	mgr.Stop()
 }
 
-func TestAutoSyncManager_PausedMaster_DoesNotUnsyncWhenNoOtherPlayer(t *testing.T) {
+func TestAutoSyncManager_IgnoredPlayerManualSelectionStability(t *testing.T) {
 	var mu sync.Mutex
 	ourMAC := "00:04:20:ee:12:34"
-	player1MAC := "00:04:20:11:11:11"
+	ignoredMAC := "00:04:20:55:55:55"
+	normalMAC := "00:04:20:66:66:66"
 
-	player1Mode := "play"
+	ignoredMode := "pause"
+	normalMode := "pause"
 	ourMaster := ""
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -299,8 +305,9 @@ func TestAutoSyncManager_PausedMaster_DoesNotUnsyncWhenNoOtherPlayer(t *testing.
 		case "players":
 			resp := map[string]interface{}{
 				"players_loop": []map[string]interface{}{
-					{"playerid": ourMAC, "name": "GoLEDs VU"},
-					{"playerid": player1MAC, "name": "Living Room"},
+					{"playerid": ourMAC, "name": "SlimVU"},
+					{"playerid": ignoredMAC, "name": "Ignored Room"},
+					{"playerid": normalMAC, "name": "Normal Room"},
 				},
 			}
 			data, _ := json.Marshal(resp)
@@ -310,7 +317,7 @@ func TestAutoSyncManager_PausedMaster_DoesNotUnsyncWhenNoOtherPlayer(t *testing.
 			if player == ourMAC {
 				resp := map[string]interface{}{
 					"playerid":    ourMAC,
-					"player_name": "GoLEDs VU",
+					"player_name": "SlimVU",
 					"mode":        "play",
 					"sync_master": ourMaster,
 				}
@@ -320,12 +327,17 @@ func TestAutoSyncManager_PausedMaster_DoesNotUnsyncWhenNoOtherPlayer(t *testing.
 			}
 
 			mode := "stop"
-			if player == player1MAC {
-				mode = player1Mode
+			name := player
+			if player == ignoredMAC {
+				mode = ignoredMode
+				name = "Ignored Room"
+			} else if player == normalMAC {
+				mode = normalMode
+				name = "Normal Room"
 			}
 			resp := map[string]interface{}{
 				"playerid":    player,
-				"player_name": player,
+				"player_name": name,
 				"mode":        mode,
 			}
 			data, _ := json.Marshal(resp)
@@ -355,34 +367,47 @@ func TestAutoSyncManager_PausedMaster_DoesNotUnsyncWhenNoOtherPlayer(t *testing.
 
 	cfg := Config{
 		OurMAC:         ourMAC,
-		OurName:        "GoLEDs VU",
+		OurName:        "SlimVU",
 		AutoSync:       true,
-		IgnoredPlayers: []string{},
+		IgnoredPlayers: []string{ignoredMAC},
 		PollInterval:   20 * time.Millisecond,
 	}
 
 	mgr := NewPlayerManager(client, cfg)
 	mgr.Start()
 
+	// Initial automated fallback: selects normalMAC, skips ignoredMAC
 	time.Sleep(60 * time.Millisecond)
-
-	// Step 1: Verify it synced to Player 1 initially
 	mac, _ := mgr.SyncedWith()
-	if mac != player1MAC {
-		t.Fatalf("Expected initial sync with Player 1 (%s), got: %s", player1MAC, mac)
+	if mac != normalMAC {
+		t.Fatalf("Expected initial fallback to Normal Room (%s), got: %s", normalMAC, mac)
 	}
 
-	// Step 2: Pause Player 1 (no other playing players available)
+	// Manually sync to the ignored player while no player is playing
+	mgr.SyncTo("Ignored Room")
+	time.Sleep(60 * time.Millisecond)
+
+	mac, _ = mgr.SyncedWith()
+	if mac != ignoredMAC {
+		t.Fatalf("Expected manual sync to Ignored Room (%s) to succeed, got: %s", ignoredMAC, mac)
+	}
+
+	// Verify that subsequent AutoSync polls DO NOT tear us away from Ignored Room while no one is playing
+	time.Sleep(60 * time.Millisecond)
+	mac, _ = mgr.SyncedWith()
+	if mac != ignoredMAC {
+		t.Fatalf("Expected AutoSync to stay slaved to manually selected Ignored Room (%s), got: %s", ignoredMAC, mac)
+	}
+
+	// When Normal Room starts PLAYING, AutoSync preempts and switches to Normal Room
 	mu.Lock()
-	player1Mode = "pause"
+	normalMode = "play"
 	mu.Unlock()
 
 	time.Sleep(60 * time.Millisecond)
-
-	// Step 3: Verify it remains slaved to Player 1 (does not unsync)
 	mac, _ = mgr.SyncedWith()
-	if mac != player1MAC {
-		t.Fatalf("Expected to stay slaved to paused Player 1 (%s), got: %s", player1MAC, mac)
+	if mac != normalMAC {
+		t.Fatalf("Expected AutoSync to switch to actively playing Normal Room (%s), got: %s", normalMAC, mac)
 	}
 
 	mgr.Stop()
@@ -675,12 +700,13 @@ func TestPlayerManager_SlaveWithSyncSlaves_DoesNotSelfUnsync(t *testing.T) {
 	mgr.Stop()
 }
 
-func TestPlayerManager_IgnoresVirtualAndAvoidListPlayers(t *testing.T) {
+func TestPlayerManager_FiltersGroupAndOtherSlimVUInstances(t *testing.T) {
 	var mu sync.Mutex
 	ourMAC := "00:04:20:ee:12:34"
-	virtualOtherMAC := "00:04:20:ee:99:99"
+	otherSlimVUMAC := "00:04:20:11:22:33"
+	groupMAC := "00:04:20:44:44:44"
 	ignoredMAC := "00:04:20:55:55:55"
-	validMAC := "00:04:20:66:66:66"
+	validMAC := "00:04:20:ee:99:99" // Notice 00:04:20:ee prefix is preserved and NOT filtered by MAC!
 
 	syncedTo := ""
 
@@ -709,20 +735,32 @@ func TestPlayerManager_IgnoresVirtualAndAvoidListPlayers(t *testing.T) {
 		case "players":
 			resp := map[string]interface{}{
 				"players_loop": []map[string]interface{}{
-					{"playerid": ourMAC, "name": "SlimVU 1"},
-					{"playerid": virtualOtherMAC, "name": "SlimVU 2"},
-					{"playerid": ignoredMAC, "name": "Ignored Room"},
-					{"playerid": validMAC, "name": "Valid Room"},
+					{"playerid": ourMAC, "name": "SlimVU 1", "modelname": "__GO_SLIMVU"},
+					{"playerid": otherSlimVUMAC, "name": "SlimVU 2", "modelname": "__GO_SLIMVU"},
+					{"playerid": groupMAC, "name": "Whole House Group", "model": "group"},
+					{"playerid": ignoredMAC, "name": "Ignored Room", "modelname": "Squeezebox"},
+					{"playerid": validMAC, "name": "Valid Room", "modelname": "Squeezebox Touch"},
 				},
 			}
 			data, _ := json.Marshal(resp)
 			_ = json.NewEncoder(w).Encode(JSONRPCResponse{Result: data})
 
 		case "status":
+			mode := "play"
+			model := "squeezebox"
+			modelName := "Squeezebox"
+			if player == otherSlimVUMAC {
+				modelName = "__GO_SLIMVU"
+			} else if player == groupMAC {
+				model = "group"
+				modelName = "Group"
+			}
 			resp := map[string]interface{}{
 				"playerid":    player,
 				"player_name": player,
-				"mode":        "play",
+				"model":       model,
+				"modelname":   modelName,
+				"mode":        mode,
 			}
 			data, _ := json.Marshal(resp)
 			_ = json.NewEncoder(w).Encode(JSONRPCResponse{Result: data})
@@ -747,6 +785,7 @@ func TestPlayerManager_IgnoresVirtualAndAvoidListPlayers(t *testing.T) {
 	cfg := Config{
 		OurMAC:         ourMAC,
 		OurName:        "SlimVU 1",
+		ModelName:      DefaultModelName,
 		AutoSync:       true,
 		IgnoredPlayers: []string{ignoredMAC},
 		PollInterval:   20 * time.Millisecond,
@@ -756,18 +795,21 @@ func TestPlayerManager_IgnoresVirtualAndAvoidListPlayers(t *testing.T) {
 	mgr.Start()
 	time.Sleep(60 * time.Millisecond)
 
-	// GetAllPlayers should NOT contain virtualOtherMAC, but SHOULD contain ignoredMAC and validMAC
+	// GetAllPlayers should NOT contain otherSlimVUMAC or groupMAC, but SHOULD contain ignoredMAC and validMAC
 	all := mgr.GetAllPlayers()
 	for _, p := range all {
-		if p.PlayerID == virtualOtherMAC {
-			t.Errorf("GetAllPlayers should have filtered out virtual MAC %s", virtualOtherMAC)
+		if p.PlayerID == otherSlimVUMAC {
+			t.Errorf("GetAllPlayers should have filtered out other SlimVU instance %s", otherSlimVUMAC)
+		}
+		if p.PlayerID == groupMAC {
+			t.Errorf("GetAllPlayers should have filtered out group player %s", groupMAC)
 		}
 	}
 	if len(all) != 2 {
 		t.Fatalf("Expected 2 external players (ignored + valid), got: %d", len(all))
 	}
 
-	// AutoSync should have synced to validMAC, skipping virtualOtherMAC and ignoredMAC
+	// AutoSync should have synced to validMAC, skipping otherSlimVUMAC, groupMAC, and ignoredMAC
 	mu.Lock()
 	if syncedTo != validMAC {
 		t.Fatalf("Expected AutoSync to sync to %s, got: %s", validMAC, syncedTo)
@@ -910,7 +952,7 @@ func TestPlayerManager_ManualSyncAndUnsyncIntent(t *testing.T) {
 			resp := map[string]interface{}{
 				"playerid":    player,
 				"player_name": name,
-				"mode":        "stop",
+				"mode":        "pause",
 			}
 			data, _ := json.Marshal(resp)
 			_ = json.NewEncoder(w).Encode(JSONRPCResponse{Result: data})
@@ -982,7 +1024,7 @@ func TestPlayerManager_ManualSyncAndUnsyncIntent(t *testing.T) {
 	mgr.Stop()
 }
 
-func TestPlayerManager_ManualSync_NonPlayingRejectedWhenAutoSyncTrue(t *testing.T) {
+func TestPlayerManager_ManualSync_PausedAcceptedWhenNoPlayerIsPlaying(t *testing.T) {
 	var mu sync.Mutex
 	ourMAC := "00:04:20:ee:12:34"
 	kitchenMAC := "00:04:20:11:22:33"
@@ -1017,13 +1059,18 @@ func TestPlayerManager_ManualSync_NonPlayingRejectedWhenAutoSyncTrue(t *testing.
 			resp := map[string]interface{}{
 				"playerid":    kitchenMAC,
 				"player_name": "Kitchen",
-				"mode":        "pause", // NOT playing!
+				"mode":        "pause", // Paused, and no other player is playing
 			}
 			data, _ := json.Marshal(resp)
 			_ = json.NewEncoder(w).Encode(JSONRPCResponse{Result: data})
 
 		case "sync":
-			syncCalled = true
+			if len(req.Params) > 1 {
+				cmds := req.Params[1].([]interface{})
+				if len(cmds) > 1 && cmds[1] == ourMAC {
+					syncCalled = true
+				}
+			}
 			_ = json.NewEncoder(w).Encode(JSONRPCResponse{})
 		}
 	}))
@@ -1044,13 +1091,13 @@ func TestPlayerManager_ManualSync_NonPlayingRejectedWhenAutoSyncTrue(t *testing.
 	mgr := NewPlayerManager(client, cfg)
 	mgr.Start()
 
-	// Try to manually sync to paused Kitchen when AutoSync is true
+	// Manually sync to paused Kitchen when NO player is playing -> should be accepted
 	mgr.SyncTo("Kitchen")
 	time.Sleep(60 * time.Millisecond)
 
 	mu.Lock()
-	if syncCalled {
-		t.Errorf("Expected manual sync to non-playing room to be rejected when AutoSync is true")
+	if !syncCalled {
+		t.Errorf("Expected manual sync to paused room to be accepted when no player is playing")
 	}
 	mu.Unlock()
 

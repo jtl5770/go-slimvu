@@ -26,14 +26,8 @@ import (
 	"time"
 )
 
-// MagicMACPrefix is the OUI / prefix used for auto-generated virtual SlimVU clients.
-const MagicMACPrefix = "00:04:20:ee"
-
-// IsVirtualPlayerMAC reports whether the given MAC address matches the SlimVU virtual client prefix.
-func IsVirtualPlayerMAC(mac string) bool {
-	clean := strings.ToLower(strings.ReplaceAll(mac, "-", ":"))
-	return strings.HasPrefix(clean, MagicMACPrefix)
-}
+// DefaultModelName is the default ModelName reported by SlimVU clients.
+const DefaultModelName = "__GO_SLIMVU"
 
 // MatchMAC compares two MAC addresses case-insensitively and regardless of delimiter (- vs :).
 func MatchMAC(a, b string) bool {
@@ -62,6 +56,7 @@ type syncIntent struct {
 type Config struct {
 	OurMAC         string        // MAC address of our SlimVU client
 	OurName        string        // Player name of our SlimVU client
+	ModelName      string        // Model name of our SlimVU client (defaults to DefaultModelName)
 	AutoSync       bool          // Whether to automatically slave to active playing players
 	IgnoredPlayers []string      // List of player names or MACs to ignore during AutoSync
 	PollInterval   time.Duration // Polling interval (defaults to 1000ms)
@@ -107,6 +102,9 @@ type PlayerManager struct {
 func NewPlayerManager(client LMSClientInterface, cfg Config) *PlayerManager {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 1000 * time.Millisecond
+	}
+	if cfg.ModelName == "" {
+		cfg.ModelName = DefaultModelName
 	}
 
 	m := &PlayerManager{
@@ -265,21 +263,18 @@ func (m *PlayerManager) StopPlayback(ctx context.Context) error {
 }
 
 func (m *PlayerManager) isOurPlayer(p PlayerStatus) bool {
-	if m.cfg.OurMAC != "" && p.Matches(m.cfg.OurMAC) {
-		return true
-	}
-	if m.cfg.OurName != "" && p.Matches(m.cfg.OurName) {
+	if m.cfg.OurMAC != "" && MatchMAC(p.PlayerID, m.cfg.OurMAC) {
 		return true
 	}
 	return false
 }
 
-// isValidSyncTarget reports whether targetMaster is valid (non-empty, not a virtual SlimVU client, and not our player).
+// isValidSyncTarget reports whether targetMaster is valid (non-empty and not our player).
 func (m *PlayerManager) isValidSyncTarget(targetMaster string) bool {
 	if targetMaster == "" {
 		return false
 	}
-	if IsVirtualPlayerMAC(targetMaster) || MatchMAC(targetMaster, m.cfg.OurMAC) {
+	if MatchMAC(targetMaster, m.cfg.OurMAC) {
 		return false
 	}
 	return true
@@ -369,6 +364,12 @@ func (m *PlayerManager) refreshState(ctx context.Context) (*PlayerStatus, []Play
 		if p.Name != "" && (status.Name == "" || status.Matches(p.PlayerID)) {
 			status.Name = p.Name
 		}
+		if status.Model == "" {
+			status.Model = p.Model
+		}
+		if status.ModelName == "" {
+			status.ModelName = p.ModelName
+		}
 		allStatuses = append(allStatuses, *status)
 		if m.isOurPlayer(*status) {
 			s := *status
@@ -409,7 +410,7 @@ func (m *PlayerManager) refreshState(ctx context.Context) (*PlayerStatus, []Play
 
 	var external []PlayerStatus
 	for _, st := range allStatuses {
-		if m.isOurPlayer(st) || IsVirtualPlayerMAC(st.PlayerID) {
+		if m.isOurPlayer(st) || st.ModelName == m.cfg.ModelName || st.Model == "group" {
 			continue
 		}
 		external = append(external, st)
@@ -423,6 +424,15 @@ func (m *PlayerManager) refreshState(ctx context.Context) (*PlayerStatus, []Play
 	m.mu.Unlock()
 
 	return ourStatus, external, nil
+}
+
+func (m *PlayerManager) hasAnyPlayingPlayer(external []PlayerStatus) bool {
+	for _, p := range external {
+		if !m.isIgnored(p) && p.IsPlaying() {
+			return true
+		}
+	}
+	return false
 }
 
 // poll executes one full cycle: queries state, processes any pending manual sync intent,
@@ -455,8 +465,11 @@ func (m *PlayerManager) poll(ctx context.Context) {
 		targetPlayer := findExternal(external, intent.target)
 		if targetPlayer == nil {
 			slog.Warn("PlayerManager: manual sync target not found in external players", "target", intent.target)
-		} else if autoSyncEnabled && !targetPlayer.IsPlaying() {
-			slog.Warn("PlayerManager: cannot manually sync to non-playing player while AutoSync is active",
+		} else if targetPlayer.IsStopped() {
+			slog.Warn("PlayerManager: cannot manually sync to stopped player",
+				"target", targetPlayer.Name, "mode", targetPlayer.Mode)
+		} else if autoSyncEnabled && !targetPlayer.IsPlaying() && m.hasAnyPlayingPlayer(external) {
+			slog.Warn("PlayerManager: cannot manually sync to paused player while another player is playing and AutoSync is active",
 				"target", targetPlayer.Name, "mode", targetPlayer.Mode)
 		} else {
 			target := *targetPlayer
@@ -484,16 +497,21 @@ func (m *PlayerManager) isIgnored(p PlayerStatus) bool {
 	return false
 }
 
-// evaluateAutoSync checks if the current sync master is playing, and if not, slaves to an active playing player.
+// evaluateAutoSync implements the multi-tier AutoSync priority policy:
+// 1. If already slaved to a PLAYING master: stay slaved (preserves manual sync even if ignored).
+// 2. Else, if any external non-ignored player is PLAYING: sync to the first playing player.
+// 3. Else, if already slaved to a PAUSED master: stay slaved (hysteresis/stability: preserves manual sync even if ignored).
+// 4. Else, if any external non-ignored player is PAUSED: sync to the first paused player.
+// 5. Else: all players stopped or ignored -> remain in current state / unsynced.
 func (m *PlayerManager) evaluateAutoSync(ctx context.Context, ourStatus *PlayerStatus, external []PlayerStatus) {
-	// If currently slaved to a master that is actively playing, stay slaved.
+	// Tier 1: If currently slaved to a master that is actively PLAYING, stay slaved.
 	if ourStatus != nil && ourStatus.IsSlaved() {
 		if currentMaster := findExternal(external, ourStatus.SyncMaster); currentMaster != nil && currentMaster.IsPlaying() {
 			return
 		}
 	}
 
-	// Find the first external physical player that is actively playing
+	// Tier 2: Find the first external physical non-ignored player that is actively PLAYING.
 	for _, p := range external {
 		if m.isIgnored(p) || !p.IsPlaying() {
 			continue
@@ -510,4 +528,31 @@ func (m *PlayerManager) evaluateAutoSync(ctx context.Context, ourStatus *PlayerS
 			return
 		}
 	}
+
+	// Tier 3: If already slaved to a PAUSED master, stay slaved (hysteresis/stability & manual selection preservation).
+	if ourStatus != nil && ourStatus.IsSlaved() {
+		if currentMaster := findExternal(external, ourStatus.SyncMaster); currentMaster != nil && currentMaster.IsPaused() {
+			return
+		}
+	}
+
+	// Tier 4: Find the first external physical non-ignored player that is PAUSED.
+	for _, p := range external {
+		if m.isIgnored(p) || !p.IsPaused() {
+			continue
+		}
+
+		target := p
+		if p.IsSlaved() {
+			if master := findExternal(external, p.SyncMaster); master != nil {
+				target = *master
+			}
+		}
+
+		if m.syncToPlayer(ctx, target) {
+			return
+		}
+	}
+
+	// Tier 5: All players stopped or ignored -> remain in current state / unsynced.
 }

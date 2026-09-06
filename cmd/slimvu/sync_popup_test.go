@@ -103,25 +103,36 @@ func TestSyncPopup_SelectabilityRules(t *testing.T) {
 	pausedPlayer := slimvu.PlayerStatus{PlayerID: "02", Mode: "pause"}
 	stoppedPlayer := slimvu.PlayerStatus{PlayerID: "03", Mode: "stop"}
 
-	// When AutoSync is true: Only playing players are selectable
-	if !isPlayerSelectable(playingPlayer, true) {
-		t.Error("playing player should be selectable when autoSync=true")
+	// Case 1: AutoSync is true AND at least one player is playing -> only playing players are selectable
+	if !isPlayerSelectable(playingPlayer, true, true) {
+		t.Error("playing player should be selectable when autoSync=true and anyPlaying=true")
 	}
-	if isPlayerSelectable(pausedPlayer, true) {
-		t.Error("paused player should NOT be selectable when autoSync=true")
+	if isPlayerSelectable(pausedPlayer, true, true) {
+		t.Error("paused player should NOT be selectable when autoSync=true and anyPlaying=true")
 	}
-	if isPlayerSelectable(stoppedPlayer, true) {
-		t.Error("stopped player should NOT be selectable when autoSync=true")
+	if isPlayerSelectable(stoppedPlayer, true, true) {
+		t.Error("stopped player should NOT be selectable when autoSync=true and anyPlaying=true")
 	}
 
-	// When AutoSync is false: Playing and paused players are selectable
-	if !isPlayerSelectable(playingPlayer, false) {
+	// Case 2: AutoSync is true AND NO player is playing -> playing and paused players are selectable
+	if !isPlayerSelectable(playingPlayer, true, false) {
+		t.Error("playing player should be selectable when autoSync=true and anyPlaying=false")
+	}
+	if !isPlayerSelectable(pausedPlayer, true, false) {
+		t.Error("paused player should be selectable when autoSync=true and anyPlaying=false")
+	}
+	if isPlayerSelectable(stoppedPlayer, true, false) {
+		t.Error("stopped player should NOT be selectable when autoSync=true and anyPlaying=false")
+	}
+
+	// Case 3: AutoSync is false -> playing and paused players are selectable (anyPlaying ignored)
+	if !isPlayerSelectable(playingPlayer, false, true) {
 		t.Error("playing player should be selectable when autoSync=false")
 	}
-	if !isPlayerSelectable(pausedPlayer, false) {
+	if !isPlayerSelectable(pausedPlayer, false, true) {
 		t.Error("paused player should be selectable when autoSync=false")
 	}
-	if isPlayerSelectable(stoppedPlayer, false) {
+	if isPlayerSelectable(stoppedPlayer, false, true) {
 		t.Error("stopped player should NOT be selectable when autoSync=false")
 	}
 }
@@ -161,7 +172,7 @@ func TestSyncPopup_RenderAndOverlay(t *testing.T) {
 		t.Error("rendered popup missing SYNCED status for active master")
 	}
 	if !strings.Contains(output, "Not selectable") {
-		t.Error("rendered popup missing 'Not selectable' for paused player under autoSync=true")
+		t.Error("rendered popup missing 'Not selectable' for paused player under autoSync=true and anyPlaying=true")
 	}
 	if !strings.Contains(output, "Header Line") {
 		t.Error("overlay missing background header line")

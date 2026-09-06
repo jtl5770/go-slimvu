@@ -32,6 +32,9 @@ import (
 	"github.com/jtl5770/go-slimvu/slimproto"
 )
 
+// MagicMACPrefix is the default OUI / prefix used for auto-generated virtual SlimVU clients.
+const MagicMACPrefix = "00:04:20:ee"
+
 // SqueezeboxAudioProvider implements AudioProvider using SlimProto and LMS JSON-RPC.
 type SqueezeboxAudioProvider struct {
 	levels    *AtomicLevels
@@ -49,6 +52,7 @@ type Config struct {
 	JSONRPCPort    int           `yaml:"JSONRPCPort"`
 	PlayerMAC      string        `yaml:"PlayerMAC"`
 	PlayerName     string        `yaml:"PlayerName"`
+	ModelName      string        `yaml:"ModelName"`
 	IgnoredPlayers []string      `yaml:"IgnoredPlayers"`
 	AutoSync       bool          `yaml:"AutoSync"`
 	PollInterval   time.Duration `yaml:"PollInterval"`
@@ -147,6 +151,11 @@ func NewProvider(cfg Config) (*SqueezeboxAudioProvider, error) {
 		}
 	}
 
+	modelName := cfg.ModelName
+	if modelName == "" {
+		modelName = slimproto.DefaultModelName
+	}
+
 	levels := NewAtomicLevels()
 	serverSlim := fmt.Sprintf("%s:%d", serverHost, slimProtoPort)
 	helo := slimproto.HeloConfig{
@@ -154,6 +163,7 @@ func NewProvider(cfg Config) (*SqueezeboxAudioProvider, error) {
 		DeviceID:   12, // SqueezePlay / SqueezeSlave
 		Revision:   1,
 		PlayerName: cfg.PlayerName,
+		ModelName:  modelName,
 	}
 
 	protoClient := slimproto.NewClient(serverSlim, helo, levels)
@@ -162,6 +172,7 @@ func NewProvider(cfg Config) (*SqueezeboxAudioProvider, error) {
 	mgrConfig := control.Config{
 		OurMAC:         mac.String(),
 		OurName:        cfg.PlayerName,
+		ModelName:      modelName,
 		AutoSync:       cfg.AutoSync,
 		IgnoredPlayers: cfg.IgnoredPlayers,
 		PollInterval:   pollInterval,

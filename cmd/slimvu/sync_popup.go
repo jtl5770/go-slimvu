@@ -144,8 +144,23 @@ func (p *syncPopup) SelectedPlayer() (slimvu.PlayerStatus, bool) {
 	return slimvu.PlayerStatus{}, false
 }
 
-func isPlayerSelectable(p slimvu.PlayerStatus, autoSync bool) bool {
-	if autoSync {
+func (p *syncPopup) AnyPlayerPlaying() bool {
+	for _, player := range p.players {
+		if player.IsPlaying() {
+			return true
+		}
+	}
+	return false
+}
+
+func isPlayerSelectable(p slimvu.PlayerStatus, autoSync bool, anyPlaying bool) bool {
+	if p.IsStopped() {
+		return false
+	}
+	if !autoSync {
+		return p.IsPlaying() || p.IsPaused()
+	}
+	if anyPlaying {
 		return p.IsPlaying()
 	}
 	return p.IsPlaying() || p.IsPaused()
@@ -218,10 +233,12 @@ func (p syncPopup) RenderBox(termWidth int, autoSync bool, syncedMAC, syncedName
 			end = len(p.players)
 		}
 
+		anyPlaying := p.AnyPlayerPlaying()
+
 		for idx := start; idx < end; idx++ {
 			player := p.players[idx]
 			isFocused := (idx == p.cursorIndex)
-			selectable := isPlayerSelectable(player, autoSync)
+			selectable := isPlayerSelectable(player, autoSync, anyPlaying)
 
 			isSynced := (syncedMAC != "" && player.Matches(syncedMAC)) ||
 				(syncedName != "" && player.Matches(syncedName))
@@ -324,7 +341,7 @@ func (p syncPopup) RenderBox(termWidth int, autoSync bool, syncedMAC, syncedName
 				)
 
 				leadStyle := lipgloss.NewStyle().Background(bgCol)
-				trailStyle := lipgloss.NewStyle().Background(bgCol)
+				ttrailStyle := lipgloss.NewStyle().Background(bgCol)
 
 				if !selectable {
 					hintStyle := helpStyle.Background(bgCol)
@@ -335,7 +352,7 @@ func (p syncPopup) RenderBox(termWidth int, autoSync bool, syncedMAC, syncedName
 					line2 = fmt.Sprintf("%s%s%s",
 						leadStyle.Render("  "),
 						hintStyle.Render("Not selectable"),
-						trailStyle.Render(strings.Repeat(" ", trailSpaces)),
+						ttrailStyle.Render(strings.Repeat(" ", trailSpaces)),
 					)
 				} else {
 					rawTrack := formatTrackText(player.GetTrackInfo())
@@ -348,7 +365,7 @@ func (p syncPopup) RenderBox(termWidth int, autoSync bool, syncedMAC, syncedName
 					line2 = fmt.Sprintf("%s%s%s",
 						leadStyle.Render("  "),
 						trackStyle.Render(displayTrack),
-						trailStyle.Render(strings.Repeat(" ", trailSpaces)),
+						ttrailStyle.Render(strings.Repeat(" ", trailSpaces)),
 					)
 				}
 			} else {

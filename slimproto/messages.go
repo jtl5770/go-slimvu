@@ -24,6 +24,9 @@ import (
 	"net"
 )
 
+// DefaultModelName is the default ModelName reported by SlimVU in the HELO capabilities string.
+const DefaultModelName = "__GO_SLIMVU"
+
 // Standard SlimProto opcodes
 var (
 	OpHelo = [4]byte{'H', 'E', 'L', 'O'}
@@ -57,6 +60,7 @@ type HeloConfig struct {
 	MAC          net.HardwareAddr
 	Capabilities string
 	PlayerName   string
+	ModelName    string
 }
 
 // EncodeHelo creates a standard HELO packet for handshake with LMS conforming to Squeezelite.
@@ -74,9 +78,9 @@ type HeloConfig struct {
 func EncodeHelo(cfg HeloConfig) []byte {
 	caps := cfg.Capabilities
 	if caps == "" {
-		modelName := cfg.PlayerName
+		modelName := cfg.ModelName
 		if modelName == "" {
-			modelName = "SlimVU"
+			modelName = DefaultModelName
 		}
 		caps = fmt.Sprintf("Model=squeezelite,ModelName=%s,MaxSampleRate=384000,AccuratePlayPoints=1,HasDigitalOut=1,HasPolarityInversion=1,Firmware=v1.9.9-1414,flc,pcm,mp3,aac,ogg,ops", modelName)
 	}
@@ -198,15 +202,13 @@ func EncodeStat(event StatEvent, streamBufSize uint32, streamBufFullness uint32,
 
 	binary.BigEndian.PutUint32(buf[offset:offset+4], outBufSize)                  // [29..33] output_buffer_size
 	binary.BigEndian.PutUint32(buf[offset+4:offset+8], outBufFullness)            // [33..37] output_buffer_fullness
-	binary.BigEndian.PutUint32(buf[offset+8:offset+12], elapsedMilliseconds/1000) // [37..41] elapsed_seconds
-	offset += 12
+	offset += 8
 
-	binary.BigEndian.PutUint16(buf[offset:offset+2], 0) // [41..43] voltage
-	offset += 2
-
-	binary.BigEndian.PutUint32(buf[offset:offset+4], elapsedMilliseconds) // [43..47] elapsed_milliseconds
-	binary.BigEndian.PutUint32(buf[offset+4:offset+8], serverTimestamp)   // [47..51] server_timestamp
-	binary.BigEndian.PutUint16(buf[offset+8:offset+10], 0)                // [51..53] error_code
+	binary.BigEndian.PutUint32(buf[offset:offset+4], elapsedMilliseconds/1000) // [37..41] elapsed_seconds
+	binary.BigEndian.PutUint16(buf[offset+4:offset+6], 0)                      // [41..43] voltage
+	binary.BigEndian.PutUint32(buf[offset+6:offset+10], elapsedMilliseconds)   // [43..47] elapsed_milliseconds
+	binary.BigEndian.PutUint32(buf[offset+10:offset+14], serverTimestamp)      // [47..51] server_timestamp
+	binary.BigEndian.PutUint16(buf[offset+14:offset+16], 0)                    // [51..53] error_code
 
 	return buf
 }
