@@ -410,7 +410,7 @@ func (m *PlayerManager) refreshState(ctx context.Context) (*PlayerStatus, []Play
 
 	var external []PlayerStatus
 	for _, st := range allStatuses {
-		if m.isOurPlayer(st) || st.ModelName == m.cfg.ModelName || st.Model == "group" {
+		if m.isOurPlayer(st) || st.ModelName == m.cfg.ModelName {
 			continue
 		}
 		external = append(external, st)

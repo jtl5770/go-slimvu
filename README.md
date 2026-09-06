@@ -94,6 +94,13 @@ Usage of slimvu:
         File path to write debug/info logs (disabled by default)
 ```
 
+## LMS Group Players Plugin
+
+If you are using the LMS **Group Players** plugin (`LMS-Groups` by philippe44) to create virtual group players, external/virtual players like SlimVU can synchronize to the group master:
+- In LMS Web UI, navigate to P**lugins -> Group Players**.
+- Enable the option **"Synchronize to Group Players"**.
+- With this enabled, SlimVU can slave directly to the Group Player entity and receive synced audio streams when the group is playing.
+
 ## Library SDK Guide
 
 The `go-slimvu` package exposes a clean, high-level API designed for applications, LED controllers, displays, and audio monitors.
@@ -176,7 +183,7 @@ type Config struct {
 
 #### Player Discovery & Status
 - **`provider.GetAllPlayers() []control.PlayerStatus`**
-  Returns a snapshot of all external physical players currently connected to LMS (virtual SlimVU instances are automatically filtered). Automatically updates in real time when players disconnect or power down.
+  Returns a snapshot of all external physical and group players currently connected to LMS (virtual SlimVU instances are automatically filtered). Automatically updates in real time when players disconnect or power down.
 - **`provider.GetOurPlayer() control.PlayerStatus`**
   Returns the current status of the local virtual player.
 - **`provider.GetSyncedPlayer() (mac, name string)`**

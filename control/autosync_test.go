@@ -700,7 +700,7 @@ func TestPlayerManager_SlaveWithSyncSlaves_DoesNotSelfUnsync(t *testing.T) {
 	mgr.Stop()
 }
 
-func TestPlayerManager_FiltersGroupAndOtherSlimVUInstances(t *testing.T) {
+func TestPlayerManager_FiltersOtherSlimVUInstances(t *testing.T) {
 	var mu sync.Mutex
 	ourMAC := "00:04:20:ee:12:34"
 	otherSlimVUMAC := "00:04:20:11:22:33"
@@ -787,7 +787,7 @@ func TestPlayerManager_FiltersGroupAndOtherSlimVUInstances(t *testing.T) {
 		OurName:        "SlimVU 1",
 		ModelName:      DefaultModelName,
 		AutoSync:       true,
-		IgnoredPlayers: []string{ignoredMAC},
+		IgnoredPlayers: []string{ignoredMAC, groupMAC},
 		PollInterval:   20 * time.Millisecond,
 	}
 
@@ -795,21 +795,18 @@ func TestPlayerManager_FiltersGroupAndOtherSlimVUInstances(t *testing.T) {
 	mgr.Start()
 	time.Sleep(60 * time.Millisecond)
 
-	// GetAllPlayers should NOT contain otherSlimVUMAC or groupMAC, but SHOULD contain ignoredMAC and validMAC
+	// GetAllPlayers should NOT contain otherSlimVUMAC, but SHOULD contain groupMAC, ignoredMAC, and validMAC
 	all := mgr.GetAllPlayers()
 	for _, p := range all {
 		if p.PlayerID == otherSlimVUMAC {
 			t.Errorf("GetAllPlayers should have filtered out other SlimVU instance %s", otherSlimVUMAC)
 		}
-		if p.PlayerID == groupMAC {
-			t.Errorf("GetAllPlayers should have filtered out group player %s", groupMAC)
-		}
 	}
-	if len(all) != 2 {
-		t.Fatalf("Expected 2 external players (ignored + valid), got: %d", len(all))
+	if len(all) != 3 {
+		t.Fatalf("Expected 3 external players (group + ignored + valid), got: %d", len(all))
 	}
 
-	// AutoSync should have synced to validMAC, skipping otherSlimVUMAC, groupMAC, and ignoredMAC
+	// AutoSync should have synced to validMAC (since ignoredMAC and groupMAC are ignored)
 	mu.Lock()
 	if syncedTo != validMAC {
 		t.Fatalf("Expected AutoSync to sync to %s, got: %s", validMAC, syncedTo)
