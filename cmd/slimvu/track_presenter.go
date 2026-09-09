@@ -23,6 +23,26 @@ import (
 	"strings"
 )
 
+// scrollRunes scrolls the given runes slice with marquee wrap-around at a given tick divider.
+func scrollRunes(runes []rune, maxW int, tickCount int, speedDiv int) string {
+	if len(runes) <= maxW {
+		return string(runes)
+	}
+	sep := "   •••   "
+	fullRunes := append(runes, []rune(sep)...)
+	if speedDiv <= 0 {
+		speedDiv = 1
+	}
+	scrollOffset := (tickCount / speedDiv) % len(fullRunes)
+
+	var looped []rune
+	for i := 0; i < maxW; i++ {
+		idx := (scrollOffset + i) % len(fullRunes)
+		looped = append(looped, fullRunes[idx])
+	}
+	return string(looped)
+}
+
 func formatFixedDuration(sec float64, hasHours bool) string {
 	if sec < 0 {
 		sec = 0
@@ -81,22 +101,7 @@ func (m model) renderTrackInfo(totalWidth int) string {
 		availWidth = 10
 	}
 
-	runes := m.cachedTitleRunes
-	var displayTitle string
-	if len(runes) > availWidth {
-		sep := "   •••   "
-		fullRunes := append(runes, []rune(sep)...)
-		scrollOffset := (m.tickCount / 6) % len(fullRunes)
-
-		var looped []rune
-		for i := 0; i < availWidth; i++ {
-			idx := (scrollOffset + i) % len(fullRunes)
-			looped = append(looped, fullRunes[idx])
-		}
-		displayTitle = string(looped)
-	} else {
-		displayTitle = m.cachedRawTitle
-	}
+	displayTitle := scrollRunes(m.cachedTitleRunes, availWidth, m.tickCount, 6)
 
 	displayLen := len([]rune(displayTitle))
 	spacing := totalWidth - (iconLen + displayLen + rightBadgeLen)

@@ -201,16 +201,7 @@ func renderScrollingOrTruncated(text string, maxW int, scroll bool, tickCount in
 		return text
 	}
 	if scroll {
-		sep := "   •••   "
-		fullRunes := append(runes, []rune(sep)...)
-		scrollOffset := (tickCount / 12) % len(fullRunes)
-
-		var looped []rune
-		for i := 0; i < maxW; i++ {
-			idx := (scrollOffset + i) % len(fullRunes)
-			looped = append(looped, fullRunes[idx])
-		}
-		return string(looped)
+		return scrollRunes(runes, maxW, tickCount, 12)
 	}
 	return string(runes[:maxW-1]) + "…"
 }
