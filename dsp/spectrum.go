@@ -32,7 +32,7 @@ const (
 	// invMaxPCM32 converts sum of two 16-bit signed PCM channels [-65536, 65534] to [-1.0, 1.0].
 	invMaxPCM32 = float32(1.0 / 65536.0)
 	// DefaultDecayRateDBPerSec is the ballistic decay speed in dB per second (60 dB/s).
-	DefaultDecayRateDBPerSec = 60.0
+	DefaultDecayRateDBPerSec = 100.0
 	// minMagSqClamp clamps squared magnitude before log10 to prevent evaluation below -100 dBFS ((1e-5)^2 = 1e-10).
 	minMagSqClamp = 1e-10
 )
@@ -70,6 +70,14 @@ func NewSpectrumAnalyzer() *SpectrumAnalyzer {
 		sa.levels[i] = float32(SilenceFloorDB)
 	}
 	return sa
+}
+
+// SetDecayRate configures the ballistic decay speed in dB per second.
+func (s *SpectrumAnalyzer) SetDecayRate(rate float32) {
+	if rate < 0 {
+		rate = 0
+	}
+	s.decayRate = rate
 }
 
 // SelectFFTSize maps the audio sample rate to the appropriate power-of-two FFT window.
@@ -170,17 +178,14 @@ func (s *SpectrumAnalyzer) aggregateBands(n int, sampleRate uint32, plan *fftPla
 			kEnd = halfN
 		}
 
-		// Find peak power in this band
-		var maxMagSq float32
+		// Sum power across all bins in this band (ANSI fractional-octave integrated energy)
+		var sumMagSq float32
 		for k := kStart; k <= kEnd; k++ {
-			magSq := s.realBuf[k]*s.realBuf[k] + s.imagBuf[k]*s.imagBuf[k]
-			if magSq > maxMagSq {
-				maxMagSq = magSq
-			}
+			sumMagSq += s.realBuf[k]*s.realBuf[k] + s.imagBuf[k]*s.imagBuf[k]
 		}
 
 		// Fast dBFS calculation: 20 * log10(sqrt(P) * W) = 10 * log10(P) + 20 * log10(W)
-		val := float64(maxMagSq)
+		val := float64(sumMagSq)
 		if val < minMagSqClamp {
 			val = minMagSqClamp
 		}

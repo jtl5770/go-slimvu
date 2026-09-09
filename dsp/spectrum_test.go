@@ -100,11 +100,11 @@ func TestSpectrumAnalyzer_DecaySilence(t *testing.T) {
 		sa.levels[i] = -10.0
 	}
 
-	// Decay over 1 second (decay rate is 60 dB/s)
-	sa.DecaySilence(1.0, &bands)
+	// Decay over 0.5 second (decay rate is 100 dB/s)
+	sa.DecaySilence(0.5, &bands)
 
 	for b := 0; b < SpectrumBandsCount; b++ {
-		expected := float32(-70.0) // -10 - 60
+		expected := float32(-60.0) // -10 - (100 * 0.5)
 		if math.Abs(float64(bands[b]-expected)) > 0.1 {
 			t.Errorf("Band %d: expected %.2f dB, got %.2f dB", b, expected, bands[b])
 		}
@@ -123,5 +123,38 @@ func TestSpectrumAnalyzer_SampleRateTransitions(t *testing.T) {
 		if bands[7] <= float32(SilenceFloorDB) {
 			t.Errorf("At sample rate %d, expected band 7 active, got %.2f", sr, bands[7])
 		}
+	}
+}
+
+func TestSpectrumAnalyzer_HighFrequencyDistributedEnergy(t *testing.T) {
+	sa := NewSpectrumAnalyzer()
+	sr := uint32(44100)
+
+	// Generate multi-tone broadband high frequency signal (12k, 14k, 16k, 18k)
+	frames := int(float64(sr) * 0.050)
+	buf := make([]byte, frames*Stereo16BitFrameBytes)
+	freqs := []float64{12000.0, 14000.0, 16000.0, 18000.0}
+	amp := 0.25
+
+	for i := 0; i < frames; i++ {
+		var val float64
+		for _, f := range freqs {
+			val += math.Sin(2.0 * math.Pi * f * float64(i) / float64(sr))
+		}
+		sample := int16(val * amp * 32767.0)
+		offset := i * Stereo16BitFrameBytes
+		binary.LittleEndian.PutUint16(buf[offset:offset+2], uint16(sample))
+		binary.LittleEndian.PutUint16(buf[offset+2:offset+4], uint16(sample))
+	}
+
+	var bands [SpectrumBandsCount]float32
+	sa.Process(buf, sr, 0.050, &bands)
+
+	// Band 14 (9.8 kHz - 15.4 kHz) and Band 15 (15.4 kHz - 20 kHz) should have robust levels > -30 dBFS
+	if bands[14] < -30.0 {
+		t.Errorf("Expected band 14 level > -30 dBFS, got %.2f dBFS", bands[14])
+	}
+	if bands[15] < -30.0 {
+		t.Errorf("Expected band 15 level > -30 dBFS, got %.2f dBFS", bands[15])
 	}
 }

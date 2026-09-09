@@ -240,3 +240,98 @@ func TestModelCoverCols(t *testing.T) {
 		t.Errorf("expected minimum 8 cover cols, got %d", colsSmall)
 	}
 }
+
+func TestModelViewRendering_SpectrumToggleAndDisplay(t *testing.T) {
+	// 1. Verify spectrumLUT invariants
+	if spectrumLUT[0].bottom.charStr != " " || spectrumLUT[0].top.charStr != " " {
+		t.Errorf("LUT step 0 should have space for top and bottom")
+	}
+	if spectrumLUT[1].bottom.charStr != "\u2581" || spectrumLUT[1].top.charStr != " " {
+		t.Errorf("LUT step 1 should have \\u2581 for bottom and space for top, got %q", spectrumLUT[1].bottom.charStr)
+	}
+	if spectrumLUT[8].bottom.charStr != "\u2588" || spectrumLUT[8].top.charStr != " " {
+		t.Errorf("LUT step 8 should have \\u2588 for bottom and space for top")
+	}
+	if spectrumLUT[9].bottom.charStr != "\u2588" || spectrumLUT[9].top.charStr != "\u2581" {
+		t.Errorf("LUT step 9 should have \\u2588 for bottom and \\u2581 for top, got top=%q", spectrumLUT[9].top.charStr)
+	}
+	if spectrumLUT[16].bottom.charStr != "\u2588" || spectrumLUT[16].top.charStr != "\u2588" {
+		t.Errorf("LUT step 16 should have \\u2588 for top and bottom")
+	}
+
+	// 2. Initialize model and verify toggle
+	m := initialModel(nil, -60, 0, 30, 250*time.Millisecond, 20.0, false, 1.6)
+	m.termWidth = 80
+	m.termHeight = 24
+	m.syncedName = "Living Room"
+	m.playing = true
+
+	if m.showSpectrum {
+		t.Fatal("expected showSpectrum to be false initially")
+	}
+
+	// Toggle ON via key "t"
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	m = updated.(model)
+	if !m.showSpectrum {
+		t.Fatal("expected showSpectrum to be true after pressing \"t\"")
+	}
+
+	// Set sample spectrum levels
+	m.spectrumBands[0] = 0.0   // Max (step 16)
+	m.spectrumBands[1] = -30.0 // Mid (step 8)
+	m.spectrumBands[2] = -60.0 // Min (step 0)
+
+	viewSpec := m.View()
+
+	if !strings.Contains(viewSpec, "Squeezebox 16-Band Spectrum") {
+		t.Errorf("expected spectrum header title in view, got %s", viewSpec)
+	}
+
+	// Compact scale checks (width 80 -> barLen 60 -> contentW 2)
+	if !strings.Contains(viewSpec, "25") || !strings.Contains(viewSpec, "1k") || !strings.Contains(viewSpec, "16") {
+		t.Errorf("expected milestone frequency labels in compact spectrum scale, got %s", viewSpec)
+	}
+
+	// Full scale checks (width 100 -> barLen 80 -> contentW 4)
+	mFull := m
+	mFull.termWidth = 100
+	viewFull := mFull.View()
+	if !strings.Contains(viewFull, "20k") || !strings.Contains(viewFull, "100") || !strings.Contains(viewFull, "630") {
+		t.Errorf("expected full frequency labels in wide spectrum scale, got %s", viewFull)
+	}
+
+	// Toggle OFF via key "t"
+	updated2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	m = updated2.(model)
+	if m.showSpectrum {
+		t.Fatal("expected showSpectrum to be false after pressing \"t\" again")
+	}
+
+	viewVU := m.View()
+	if !strings.Contains(viewVU, "Squeezebox Stereo VU Meter") {
+		t.Errorf("expected VU meter header title after toggling off, got %s", viewVU)
+	}
+}
+
+func TestRenderBar_ChannelSeparationGap(t *testing.T) {
+	m := initialModel(nil, -60, 0, 30, 250*time.Millisecond, 20.0, false, 1.6)
+	m.playing = true
+
+	// Render L bar at -6 dB
+	lBar := m.renderBar("L", -6.0, peakInfo{}, 40)
+	// L channel should contain inverted 1/8th block (\x1b[7m + \u2581)
+	if !strings.Contains(lBar, "\x1b[7m") || !strings.Contains(lBar, "\u2581") {
+		t.Errorf("expected L channel to render inverted 1/8th block, got %q", lBar)
+	}
+
+	// Render R bar at -6 dB
+	rBar := m.renderBar("R", -6.0, peakInfo{}, 40)
+	// R channel should contain 7/8th block (\u2587) and NOT inverted video
+	if !strings.Contains(rBar, "\u2587") {
+		t.Errorf("expected R channel to render 7/8th block, got %q", rBar)
+	}
+	if strings.Contains(rBar, "\x1b[7m") {
+		t.Errorf("expected R channel NOT to use inverted video, got %q", rBar)
+	}
+}

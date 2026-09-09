@@ -51,9 +51,50 @@ type meterColorEntry struct {
 	color   colorRGB
 	str     string
 	boldStr string
+	revStr  string
 }
 
 var meterColorLUT [256]meterColorEntry
+
+var spectrumFreqLabelsCompact = [16]string{
+	"25", "  ", "63", "  ", " ·", "  ", " ·", "  ",
+	"1k", "  ", "2k", "  ", "6k", "  ", "16", "  ",
+}
+
+var spectrumFreqLabels = [16]string{
+	"25", "40", "63", "100", "160", "250", "400", "630",
+	"1k", "1.6", "2.5", "4k", "6.3", "10k", "16k", "20k",
+}
+
+var vertBlocks = [9]string{
+	" ",
+	"\u2581", // lower 1/8
+	"\u2582", // lower 1/4
+	"\u2583", // lower 3/8
+	"\u2584", // lower 1/2
+	"\u2585", // lower 5/8
+	"\u2586", // lower 3/4
+	"\u2587", // lower 7/8
+	"\u2588", // full block
+}
+
+type spectrumCell struct {
+	charStr  string
+	colorStr string
+}
+
+type spectrumLUTEntry struct {
+	top    spectrumCell
+	bottom spectrumCell
+}
+
+var spectrumLUT [17]spectrumLUTEntry
+var spectrumScaleCache [128]string
+
+type spectrumBuffers struct {
+	top strings.Builder
+	bot strings.Builder
+}
 
 var (
 	styleBarLabel       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ECEFF4"))
@@ -103,14 +144,16 @@ func buildStaticFooter(autoSync, isSynced bool) string {
 		prevNextStyle = styleDisabled
 	}
 
-	return fmt.Sprintf("%s%s%s%s%s%s%s%s%s",
+	return fmt.Sprintf("%s%s%s%s%s%s%s%s%s%s%s",
 		playPauseStyle.Render("[Space] Play/Pause"),
 		styleSep,
 		prevNextStyle.Render("[←/→] Prev/Next"),
 		styleSep,
-		styleHelp.Render("[s] Sync to..."),
+		styleHelp.Render("[s] Sync"),
 		styleSep,
 		autoSyncItem,
+		styleSep,
+		styleHelp.Render("[t] Effect"),
 		styleSep,
 		styleHelp.Render("[q] Quit"),
 	)
@@ -124,6 +167,42 @@ func init() {
 			color:   c,
 			str:     c.String(),
 			boldStr: c.BoldString(),
+			revStr:  c.String() + "\x1b[7m",
+		}
+	}
+
+	for s := 0; s <= 16; s++ {
+		t := float64(s) / 16.0
+		colStr := getMeterColorEntry(t).str
+
+		// Bottom cell
+		if s == 0 {
+			spectrumLUT[s].bottom = spectrumCell{charStr: " ", colorStr: ""}
+		} else if s < 8 {
+			spectrumLUT[s].bottom = spectrumCell{
+				charStr:  vertBlocks[s],
+				colorStr: colStr,
+			}
+		} else {
+			spectrumLUT[s].bottom = spectrumCell{
+				charStr:  vertBlocks[8],
+				colorStr: colStr,
+			}
+		}
+
+		// Top cell
+		if s <= 8 {
+			spectrumLUT[s].top = spectrumCell{charStr: " ", colorStr: ""}
+		} else if s < 16 {
+			spectrumLUT[s].top = spectrumCell{
+				charStr:  vertBlocks[s-8],
+				colorStr: colStr,
+			}
+		} else {
+			spectrumLUT[s].top = spectrumCell{
+				charStr:  vertBlocks[8],
+				colorStr: colStr,
+			}
 		}
 	}
 }
@@ -174,6 +253,10 @@ type model struct {
 	coverBlock string
 
 	popup syncPopup
+
+	showSpectrum  bool
+	spectrumBands [16]float32
+	specBuf       *spectrumBuffers
 
 	tickCount int
 }
@@ -282,6 +365,7 @@ func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64
 		rightDB:    minDB,
 		autoSync:   autoSync,
 		popup:      newSyncPopup(),
+		specBuf:    &spectrumBuffers{},
 		termWidth:  80,
 		termHeight: 24,
 	}
@@ -377,6 +461,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.autoSync = enabled
 			}
 			return m, nil
+		case "t":
+			m.showSpectrum = !m.showSpectrum
+			return m, nil
 		}
 
 	case tea.WindowSizeMsg:
@@ -411,6 +498,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastUpdate = now
 
 		m.leftDB, m.rightDB, m.playing = m.provider.GetLevels()
+		if m.provider != nil {
+			m.provider.GetSpectrum(m.spectrumBands[:])
+		}
 		m.syncedMAC, m.syncedName = m.provider.SyncedWith()
 		m.autoSync = m.provider.GetAutoSync()
 		m.track, m.hasTrack = m.provider.GetTrackInfo()
@@ -525,6 +615,7 @@ func (m *model) updatePeak(peak *peakInfo, db float64, barLen int, dt float64, n
 const (
 	ansiReset = "\x1b[0m"
 	ansiOff   = "\x1b[38;2;46;52;64m" // #2E3440
+	ansiRev   = "\x1b[7m"
 )
 
 func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) string {
@@ -543,7 +634,8 @@ func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) st
 	var sb strings.Builder
 	sb.Grow(barLen*24 + 48)
 
-	if label == "L" {
+	isL := (label == "L")
+	if isL {
 		sb.WriteString(renderedLabelL)
 	} else {
 		sb.WriteString(renderedLabelR)
@@ -555,46 +647,29 @@ func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) st
 		col := getMeterColorEntry(t)
 		isPeak := (i == peakCell)
 
-		if float64(i+1) <= barPos {
-			// Fully lit cell
+		litCells := int(math.Round(barPos))
+		if i < litCells {
+			// Lit cell (uses upper 7/8 for L and lower 7/8 for R to maintain gap)
 			if isPeak {
 				sb.WriteString(peak.boldStr)
-				sb.WriteString("█")
-				sb.WriteString(ansiReset)
-			} else {
-				sb.WriteString(col.str)
-				sb.WriteString("█")
-				sb.WriteString(ansiReset)
-			}
-		} else if float64(i) < barPos {
-			// Fractional sub-pixel tip of the active bar
-			frac := barPos - float64(i)
-			subIdx := int(math.Round(frac * 8.0))
-			if subIdx > 8 {
-				subIdx = 8
-			}
-
-			if isPeak {
-				sb.WriteString(peak.boldStr)
-				if subIdx <= 0 {
-					sb.WriteString("▏")
+				if isL {
+					sb.WriteString(ansiRev)
+					sb.WriteString("\u2581")
 				} else {
-					sb.WriteString(subBlocks[subIdx])
+					sb.WriteString("\u2587")
 				}
 				sb.WriteString(ansiReset)
-			} else if subIdx <= 0 {
-				sb.WriteString(ansiOff)
-				sb.WriteString("░")
-				sb.WriteString(ansiReset)
-			} else if subIdx == 8 {
-				sb.WriteString(col.str)
-				sb.WriteString("█")
-				sb.WriteString(ansiReset)
 			} else {
-				sb.WriteString(col.str)
-				sb.WriteString(subBlocks[subIdx])
+				if isL {
+					sb.WriteString(col.revStr)
+					sb.WriteString("\u2581")
+				} else {
+					sb.WriteString(col.str)
+					sb.WriteString("\u2587")
+				}
 				sb.WriteString(ansiReset)
 			}
+
 		} else {
 			// Dark / off region beyond bar
 			if isPeak {
@@ -627,6 +702,157 @@ func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) st
 	}
 
 	return sb.String()
+}
+
+func renderSpectrumScale(barLen int) string {
+	if barLen >= 0 && barLen < len(spectrumScaleCache) && spectrumScaleCache[barLen] != "" {
+		return spectrumScaleCache[barLen]
+	}
+
+	binWidth := barLen / 16
+	if binWidth < 1 {
+		binWidth = 1
+	}
+	contentW := binWidth - 1
+	if contentW < 1 {
+		contentW = 1
+	}
+	sepW := binWidth - contentW
+
+	totalBandsW := 16 * binWidth
+	trailingPad := barLen - totalBandsW
+	if trailingPad < 0 {
+		trailingPad = 0
+	}
+
+	var sb strings.Builder
+	sb.Grow(barLen + 32)
+
+	for i := 0; i < 16; i++ {
+		var lbl string
+		if contentW >= 3 {
+			lbl = spectrumFreqLabels[i]
+		} else if contentW == 2 {
+			lbl = spectrumFreqLabelsCompact[i]
+		} else {
+			lbl = "·"
+		}
+
+		runes := []rune(lbl)
+		if len(runes) <= contentW {
+			padL := (contentW - len(runes)) / 2
+			padR := contentW - len(runes) - padL
+			sb.WriteString(strings.Repeat(" ", padL))
+			sb.WriteString(string(runes))
+			sb.WriteString(strings.Repeat(" ", padR))
+		} else {
+			sb.WriteString(string(runes[:contentW]))
+		}
+		sb.WriteString(strings.Repeat(" ", sepW))
+	}
+	if trailingPad > 0 {
+		sb.WriteString(strings.Repeat(" ", trailingPad))
+	}
+
+	indent := strings.Repeat(" ", 3) // "   " matching "L  " = 3
+	res := indent + styleScale.Render(sb.String())
+	if barLen >= 0 && barLen < len(spectrumScaleCache) {
+		spectrumScaleCache[barLen] = res
+	}
+	return res
+}
+
+func (m model) renderSpectrum(barLen int) (string, string, string) {
+	if m.specBuf == nil {
+		m.specBuf = &spectrumBuffers{}
+	}
+
+	binWidth := barLen / 16
+	if binWidth < 1 {
+		binWidth = 1
+	}
+	contentW := binWidth - 1
+	if contentW < 1 {
+		contentW = 1
+	}
+	sepW := binWidth - contentW
+
+	totalBandsW := 16 * binWidth
+	trailingPad := barLen - totalBandsW
+	if trailingPad < 0 {
+		trailingPad = 0
+	}
+
+	m.specBuf.top.Reset()
+	m.specBuf.bot.Reset()
+	m.specBuf.top.Grow(barLen*24 + 48)
+	m.specBuf.bot.Grow(barLen*24 + 48)
+
+	indent := "   "
+	m.specBuf.top.WriteString(indent)
+	m.specBuf.bot.WriteString(indent)
+
+	for i := 0; i < 16; i++ {
+		db := float64(m.spectrumBands[i])
+		clampedDB := math.Min(m.maxDB, math.Max(m.minDB, db))
+		norm := (clampedDB - m.minDB) / (m.maxDB - m.minDB)
+		step := int(math.Round(norm * 16.0))
+		if step < 0 {
+			step = 0
+		} else if step > 16 {
+			step = 16
+		}
+
+		entry := spectrumLUT[step]
+
+		// Top line
+		if entry.top.colorStr != "" {
+			m.specBuf.top.WriteString(entry.top.colorStr)
+			for k := 0; k < contentW; k++ {
+				m.specBuf.top.WriteString(entry.top.charStr)
+			}
+			m.specBuf.top.WriteString(ansiReset)
+		} else {
+			for k := 0; k < contentW; k++ {
+				m.specBuf.top.WriteByte(' ')
+			}
+		}
+		for k := 0; k < sepW; k++ {
+			m.specBuf.top.WriteByte(' ')
+		}
+
+		// Bottom line
+		if entry.bottom.colorStr != "" {
+			m.specBuf.bot.WriteString(entry.bottom.colorStr)
+			for k := 0; k < contentW; k++ {
+				m.specBuf.bot.WriteString(entry.bottom.charStr)
+			}
+			m.specBuf.bot.WriteString(ansiReset)
+		} else {
+			for k := 0; k < contentW; k++ {
+				m.specBuf.bot.WriteByte(' ')
+			}
+		}
+		for k := 0; k < sepW; k++ {
+			m.specBuf.bot.WriteByte(' ')
+		}
+	}
+
+	if trailingPad > 0 {
+		padStr := strings.Repeat(" ", trailingPad)
+		m.specBuf.top.WriteString(padStr)
+		m.specBuf.bot.WriteString(padStr)
+	}
+
+	// Suffix spacing to maintain totalWidth = barLen + 13
+	m.specBuf.top.WriteString(strings.Repeat(" ", 10))
+	m.specBuf.bot.WriteString(strings.Repeat(" ", 10))
+
+	topLine := m.specBuf.top.String()
+	botLine := m.specBuf.bot.String()
+	scaleLine := renderSpectrumScale(barLen)
+
+	return topLine, botLine, scaleLine
 }
 
 func renderScale(barLen int, minDB, maxDB float64) string {
@@ -774,22 +1000,35 @@ func (m model) View() string {
 		statusStr = renderedStatusIdle
 	}
 
+	titlePrefix := "Squeezebox Stereo VU Meter"
+	if m.showSpectrum {
+		titlePrefix = "Squeezebox 16-Band Spectrum"
+	}
+
 	var header string
 	if m.syncedName != "" {
 		syncedStr := styleSynced.Render(m.syncedName)
-		header = styleHeaderTitle.Render(fmt.Sprintf("Squeezebox Stereo VU Meter — %s  •  Synced to: %s", statusStr, syncedStr))
+		header = styleHeaderTitle.Render(fmt.Sprintf("%s — %s  •  Synced to: %s", titlePrefix, statusStr, syncedStr))
 	} else if m.syncedMAC != "" {
 		syncedStr := styleSynced.Render(m.syncedMAC)
-		header = styleHeaderTitle.Render(fmt.Sprintf("Squeezebox Stereo VU Meter — %s  •  Synced to: %s", statusStr, syncedStr))
+		header = styleHeaderTitle.Render(fmt.Sprintf("%s — %s  •  Synced to: %s", titlePrefix, statusStr, syncedStr))
 	} else {
-		header = styleHeaderTitle.Render(fmt.Sprintf("Squeezebox Stereo VU Meter — %s", statusStr))
+		header = styleHeaderTitle.Render(fmt.Sprintf("%s — %s", titlePrefix, statusStr))
 	}
 
 	trackLine := m.renderTrackInfo(totalWidth)
 
-	leftBar := m.renderBar("L", m.leftDB, m.peakLeft, barLen)
-	rightBar := m.renderBar("R", m.rightDB, m.peakRight, barLen)
-	scale := renderScale(barLen, m.minDB, m.maxDB)
+	var line1 string
+	var line2 string
+	var scale string
+
+	if m.showSpectrum {
+		line1, line2, scale = m.renderSpectrum(barLen)
+	} else {
+		line1 = m.renderBar("L", m.leftDB, m.peakLeft, barLen)
+		line2 = m.renderBar("R", m.rightDB, m.peakRight, barLen)
+		scale = renderScale(barLen, m.minDB, m.maxDB)
+	}
 
 	var footer string
 	if m.autoSync {
@@ -807,7 +1046,7 @@ func (m model) View() string {
 	}
 
 	// The track info line slot is unconditionally rendered to prevent any vertical layout jumping
-	vuContent := fmt.Sprintf("%s\n\n%s\n\n%s\n%s\n%s\n\n%s", header, trackLine, leftBar, rightBar, scale, footer)
+	vuContent := fmt.Sprintf("%s\n\n%s\n\n%s\n%s\n%s\n\n%s", header, trackLine, line1, line2, scale, footer)
 
 	var finalView string
 	if m.showCover {
