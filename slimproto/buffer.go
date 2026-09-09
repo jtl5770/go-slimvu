@@ -27,6 +27,12 @@ var (
 	ErrBufferClosed = errors.New("audio buffer closed")
 )
 
+const (
+	// DefaultAudioBufferSize is the default ring buffer capacity in bytes (8 MB).
+	// Provides ~47s at 44.1kHz, ~22s at 96kHz, ~11s at 192kHz, and ~5.5s at 384kHz 16-bit stereo PCM.
+	DefaultAudioBufferSize = 8 * 1024 * 1024
+)
+
 // AudioRingBuffer provides a thread-safe circular byte buffer with backpressure.
 // Writers block when the buffer does not have enough capacity, and are unblocked
 // as readers consume bytes or when the buffer is flushed/closed.
@@ -43,9 +49,10 @@ type AudioRingBuffer struct {
 }
 
 // NewAudioRingBuffer creates an initialized AudioRingBuffer with the given capacity in bytes.
+// If size <= 0, DefaultAudioBufferSize (8 MB) is used.
 func NewAudioRingBuffer(size int) *AudioRingBuffer {
 	if size <= 0 {
-		size = 2 * 1024 * 1024 // 2 MB default
+		size = DefaultAudioBufferSize
 	}
 	rb := &AudioRingBuffer{
 		buf:  make([]byte, size),

@@ -106,7 +106,7 @@ func NewClient(serverAddr string, heloConfig HeloConfig, levels *AtomicLevels) *
 		levels = NewAtomicLevels()
 	}
 
-	rb := NewAudioRingBuffer(2 * 1024 * 1024) // 2 MB PCM buffer (~12s @ 44.1kHz stereo)
+	rb := NewAudioRingBuffer(DefaultAudioBufferSize) // 8 MB PCM buffer (~47s @ 44.1kHz, ~11s @ 192kHz)
 	clock := NewSystemClock()
 	ctx, cancel := context.WithCancel(context.Background())
 
