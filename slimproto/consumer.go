@@ -43,22 +43,27 @@ type PacedConsumerConfig struct {
 	TickInterval time.Duration
 	RingBuffer   *AudioRingBuffer
 	Levels       *AtomicLevels
+	Spectrum     *AtomicSpectrum
 	Clock        Clock
 	Callbacks    ConsumerCallbacks
 }
 
 // PacedConsumer drains PCM audio samples from the AudioRingBuffer in real-time,
 // synchronizes jiffies timestamps, deducts micro-pause frames, detects underruns,
-// and feeds RMS dB audio level measurements into AtomicLevels.
+// and feeds RMS dB audio level measurements into AtomicLevels and 16-band spectrum
+// measurements into AtomicSpectrum.
 type PacedConsumer struct {
 	tickInterval time.Duration
 	ringBuffer   *AudioRingBuffer
 	levels       *AtomicLevels
+	spectrum     *AtomicSpectrum
+	analyzer     *dsp.SpectrumAnalyzer
 	clock        Clock
 	callbacks    ConsumerCallbacks
 
 	chunkBuf         []byte
 	frameAccumulator float64
+	bandsBuf         [dsp.SpectrumBandsCount]float32
 }
 
 // NewPacedConsumer creates an initialized PacedConsumer.
@@ -75,6 +80,8 @@ func NewPacedConsumer(cfg PacedConsumerConfig) *PacedConsumer {
 		tickInterval: interval,
 		ringBuffer:   cfg.RingBuffer,
 		levels:       cfg.Levels,
+		spectrum:     cfg.Spectrum,
+		analyzer:     dsp.NewSpectrumAnalyzer(),
 		clock:        clock,
 		callbacks:    cfg.Callbacks,
 		chunkBuf:     make([]byte, 65536),
@@ -112,6 +119,7 @@ func (p *PacedConsumer) Step(dt time.Duration) {
 	if sr == 0 {
 		sr = 44100
 	}
+	dtSec := float32(dt.Seconds())
 
 	switch state {
 	case StateStartAt:
@@ -121,13 +129,13 @@ func (p *PacedConsumer) Step(dt time.Duration) {
 			p.callbacks.SetState(StateRunning)
 			_ = p.callbacks.SendStat(StatEventPlaybackStarted)
 		}
-		p.levels.Set(-100, -100, false)
+		p.applySilence(dtSec)
 		p.frameAccumulator = 0
 
 	case StateRunning:
 		pauseFrames := p.callbacks.GetPauseFrames()
 		if pauseFrames > 0 {
-			p.levels.Set(-100, -100, false)
+			p.applySilence(dtSec)
 			framesDeducted := int64(float64(sr) * dt.Seconds())
 			p.callbacks.DeductPauseFrames(framesDeducted)
 			return
@@ -151,6 +159,11 @@ func (p *PacedConsumer) Step(dt time.Duration) {
 			p.callbacks.AddFramesPlayed(uint64(n / 4))
 			leftDB, rightDB := dsp.CalculateLevels(p.chunkBuf[:n])
 			p.levels.Set(leftDB, rightDB, true)
+
+			if p.spectrum != nil && p.analyzer != nil {
+				p.analyzer.Process(p.chunkBuf[:n], sr, dtSec, &p.bandsBuf)
+				p.spectrum.Set(&p.bandsBuf)
+			}
 		} else {
 			// Buffer underrun
 			if p.callbacks.IsDecoderDone() {
@@ -158,11 +171,29 @@ func (p *PacedConsumer) Step(dt time.Duration) {
 				p.callbacks.SetState(StateStopped)
 				_ = p.callbacks.SendStat(StatEventOutputUnderrun)
 			}
-			p.levels.Set(-100, -100, false)
+			p.applySilence(dtSec)
 		}
 
 	case StateStopped, StateBuffering, StateWaitingStart, StatePaused:
-		p.levels.Set(-100, -100, false)
+		p.applySilence(dtSec)
 		p.frameAccumulator = 0
 	}
+}
+
+// applySilence sets levels to silence (-100 dBFS, playing=false) and decays spectrum bands.
+func (p *PacedConsumer) applySilence(dtSec float32) {
+	p.levels.Set(-100, -100, false)
+	if p.spectrum != nil && p.analyzer != nil {
+		p.analyzer.DecaySilence(dtSec, &p.bandsBuf)
+		p.spectrum.Set(&p.bandsBuf)
+	}
+}
+
+// Reset clears internal accumulators, resets the DSP analyzer buffers, and enforces silence.
+func (p *PacedConsumer) Reset() {
+	p.frameAccumulator = 0
+	if p.analyzer != nil {
+		p.analyzer.Reset()
+	}
+	p.applySilence(0)
 }

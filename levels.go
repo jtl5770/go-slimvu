@@ -21,10 +21,26 @@ import (
 	"github.com/jtl5770/go-slimvu/slimproto"
 )
 
-// AudioProvider provides thread-safe, lock-free audio level measurements.
-type AudioProvider interface {
+// SpectrumBandsCount is the standard number of logarithmic frequency bands (16).
+const SpectrumBandsCount = slimproto.SpectrumBandsCount
+
+// LevelsProvider yields instantaneous stereo RMS decibel levels.
+type LevelsProvider interface {
 	// GetLevels returns the latest left and right dB levels and whether audio is playing.
 	GetLevels() (leftDB, rightDB float64, playing bool)
+}
+
+// SpectrumProvider yields real-time 16-band frequency spectrum measurements.
+type SpectrumProvider interface {
+	// GetSpectrum copies current 16-band spectrum levels into dst.
+	// Returns the number of bands copied (min(len(dst), 16)).
+	GetSpectrum(dst []float32) int
+}
+
+// AudioProvider composites level metering, spectrum analysis, and service lifecycle.
+type AudioProvider interface {
+	LevelsProvider
+	SpectrumProvider
 	// Start starts the audio provider background worker and performs initial server discovery.
 	// Start must be called before querying levels or player state.
 	Start() error
@@ -42,4 +58,13 @@ type AtomicLevels = slimproto.AtomicLevels
 // NewAtomicLevels creates an initialized AtomicLevels instance with silence (-100 dB).
 func NewAtomicLevels() *AtomicLevels {
 	return slimproto.NewAtomicLevels()
+}
+
+// AtomicSpectrum stores real-time 16-band audio spectrum levels using atomic 32-bit floats,
+// guaranteeing 100% lock-free, zero-allocation operations on both read and write paths.
+type AtomicSpectrum = slimproto.AtomicSpectrum
+
+// NewAtomicSpectrum creates an initialized AtomicSpectrum instance with silence (-100 dBFS).
+func NewAtomicSpectrum() *AtomicSpectrum {
+	return slimproto.NewAtomicSpectrum()
 }

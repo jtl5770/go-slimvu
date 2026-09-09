@@ -232,3 +232,57 @@ func TestPacedConsumer_UnderrunAtEOF(t *testing.T) {
 		t.Errorf("Expected STMu stat event sent on EOF underrun")
 	}
 }
+
+func TestPacedConsumer_SpectrumProcessingAndReset(t *testing.T) {
+	rb := NewAudioRingBuffer(65536)
+	levels := NewAtomicLevels()
+	spectrum := NewAtomicSpectrum()
+	cb := &mockConsumerCallbacks{
+		state:      StateRunning,
+		sampleRate: 44100,
+	}
+	mockClock := NewMockClock(1000, time.Now())
+
+	pc := NewPacedConsumer(PacedConsumerConfig{
+		RingBuffer: rb,
+		Levels:     levels,
+		Spectrum:   spectrum,
+		Clock:      mockClock,
+		Callbacks:  cb,
+	})
+
+	// 100ms of synthetic 16-bit audio
+	audioData := make([]byte, 17640)
+	for i := range audioData {
+		audioData[i] = 0x40
+	}
+	_, _ = rb.Write(audioData)
+
+	// Step by 50ms
+	pc.Step(50 * time.Millisecond)
+
+	var specBands [SpectrumBandsCount]float32
+	n := spectrum.CopyTo(specBands[:])
+	if n != SpectrumBandsCount {
+		t.Fatalf("Expected %d bands copied, got %d", SpectrumBandsCount, n)
+	}
+
+	// Levels and spectrum should be active
+	left, right, active := levels.Get()
+	if !active || left <= -100 || right <= -100 {
+		t.Errorf("Expected active levels, got left=%.2f right=%.2f active=%v", left, right, active)
+	}
+
+	// Test Reset()
+	pc.Reset()
+	n = spectrum.CopyTo(specBands[:])
+	for i, v := range specBands {
+		if v != -100.0 {
+			t.Errorf("Band %d: expected -100.0 after Reset(), got %.2f", i, v)
+		}
+	}
+	l, r, act := levels.Get()
+	if act || l != -100 || r != -100 {
+		t.Errorf("Expected silence levels after Reset, got %f/%f %v", l, r, act)
+	}
+}

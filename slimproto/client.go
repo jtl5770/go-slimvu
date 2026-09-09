@@ -65,6 +65,7 @@ type Client struct {
 	serverHost string
 	heloConfig HeloConfig
 	levels     *AtomicLevels
+	spectrum   *AtomicSpectrum
 
 	transport   *TCPTransport
 	fetcher     StreamFetcher
@@ -97,13 +98,19 @@ type Client struct {
 }
 
 // NewClient creates a new Squeezelite-compliant SlimProto Client orchestrator.
-func NewClient(serverAddr string, heloConfig HeloConfig, levels *AtomicLevels) *Client {
+func NewClient(serverAddr string, heloConfig HeloConfig, levels *AtomicLevels, spectrum ...*AtomicSpectrum) *Client {
 	host, _, err := net.SplitHostPort(serverAddr)
 	if err != nil {
 		host = serverAddr
 	}
 	if levels == nil {
 		levels = NewAtomicLevels()
+	}
+	var spec *AtomicSpectrum
+	if len(spectrum) > 0 && spectrum[0] != nil {
+		spec = spectrum[0]
+	} else {
+		spec = NewAtomicSpectrum()
 	}
 
 	rb := NewAudioRingBuffer(DefaultAudioBufferSize) // 8 MB PCM buffer (~47s @ 44.1kHz, ~11s @ 192kHz)
@@ -114,6 +121,7 @@ func NewClient(serverAddr string, heloConfig HeloConfig, levels *AtomicLevels) *
 		serverHost:  host,
 		heloConfig:  heloConfig,
 		levels:      levels,
+		spectrum:    spec,
 		fetcher:     NewHTTPStreamer(5 * time.Second),
 		ringBuffer:  rb,
 		clock:       clock,
@@ -125,6 +133,7 @@ func NewClient(serverAddr string, heloConfig HeloConfig, levels *AtomicLevels) *
 		TickInterval: 10 * time.Millisecond,
 		RingBuffer:   rb,
 		Levels:       levels,
+		Spectrum:     spec,
 		Clock:        clock,
 		Callbacks:    c,
 	})
@@ -139,6 +148,16 @@ func NewClient(serverAddr string, heloConfig HeloConfig, levels *AtomicLevels) *
 	c.channels.Store(2)
 	c.state.Store(int32(StateStopped))
 	return c
+}
+
+// Levels returns the AtomicLevels instance associated with this client.
+func (c *Client) Levels() *AtomicLevels {
+	return c.levels
+}
+
+// Spectrum returns the AtomicSpectrum instance associated with this client.
+func (c *Client) Spectrum() *AtomicSpectrum {
+	return c.spectrum
 }
 
 // GetSampleRate returns the current stream sample rate dynamically.
@@ -266,7 +285,11 @@ func (c *Client) Stop() error {
 	c.streamWg.Wait()
 	c.wg.Wait()
 
-	c.levels.Set(-100, -100, false)
+	if c.consumer != nil {
+		c.consumer.Reset()
+	} else {
+		c.levels.Set(-100, -100, false)
+	}
 	slog.Info("SlimProto client stopped")
 	return nil
 }
@@ -452,6 +475,9 @@ func (c *Client) handleStrm(strm *StrmCommand) {
 		c.pauseFrames.Store(0)
 		c.ringBuffer.Flush()
 		c.framesPlayed.Store(0)
+		if c.consumer != nil {
+			c.consumer.Reset()
+		}
 		c.SetState(StateStopped)
 		_ = c.SendStat(StatEventFlushAck)
 
@@ -466,6 +492,9 @@ func (c *Client) handleStrm(strm *StrmCommand) {
 		c.pauseFrames.Store(0)
 		c.ringBuffer.Flush()
 		c.framesPlayed.Store(0)
+		if c.consumer != nil {
+			c.consumer.Reset()
+		}
 		_ = c.SendStat(StatEventFlushAck)
 
 	case 'a': // Skip ahead

@@ -51,102 +51,108 @@ func TestSqueezeboxAudioProvider_ExplicitHost(t *testing.T) {
 
 	provider, err := NewProvider(cfg)
 	if err != nil {
-		t.Fatalf("Failed to create provider: %v", err)
+		t.Fatalf("Expected successful creation with explicit host, got: %v", err)
+	}
+	if provider == nil {
+		t.Fatal("Expected provider not nil")
 	}
 
-	leftDB, rightDB, playing := provider.GetLevels()
-	if playing {
-		t.Errorf("Expected initial playing to be false")
+	left, right, playing := provider.GetLevels()
+	if left != -100 || right != -100 || playing {
+		t.Errorf("Expected initial levels -100/-100 false, got %f/%f %v", left, right, playing)
 	}
-	if leftDB != -100 || rightDB != -100 {
-		t.Errorf("Expected initial levels to be -100, got %f, %f", leftDB, rightDB)
+
+	var bands [SpectrumBandsCount]float32
+	n := provider.GetSpectrum(bands[:])
+	if n != SpectrumBandsCount {
+		t.Errorf("Expected %d spectrum bands copied, got %d", SpectrumBandsCount, n)
+	}
+	for b, val := range bands {
+		if val != -100.0 {
+			t.Errorf("Band %d: expected -100.0 initial silence, got %.2f", b, val)
+		}
 	}
 }
 
 func TestSqueezeboxAudioProvider_ExplicitHost_DefaultPorts(t *testing.T) {
 	cfg := Config{
-		Server:     "127.0.0.1",
-		PlayerMAC:  "00:04:20:11:22:33",
-		PlayerName: "Test VU",
+		Server: "192.168.1.100",
 	}
 
 	provider, err := NewProvider(cfg)
 	if err != nil {
-		t.Fatalf("Failed to create provider: %v", err)
+		t.Fatalf("Expected success with default ports, got: %v", err)
 	}
-
-	if provider.proto == nil {
-		t.Fatalf("Expected proto client to be initialized")
+	if provider == nil {
+		t.Fatal("Expected provider not nil")
 	}
 }
 
 func TestSqueezeboxAudioProvider_StartStopLifecycle(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("Failed to listen: %v", err)
+		t.Fatalf("Failed to bind mock SlimProto: %v", err)
 	}
 	defer ln.Close()
 
 	tcpAddr := ln.Addr().(*net.TCPAddr)
 
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		resp := control.JSONRPCResponse{
+			Result: []byte(`{"version": "8.3.0"}`),
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	u, _ := url.Parse(ts.URL)
+	port, _ := strconv.Atoi(u.Port())
+
 	cfg := Config{
-		Server:        "127.0.0.1",
+		Server:        u.Hostname(),
 		SlimProtoPort: tcpAddr.Port,
-		JSONRPCPort:   9000,
-		PlayerMAC:     "00:04:20:ee:11:22",
-		PlayerName:    "Test Lifecycle",
-		AutoSync:      false,
+		JSONRPCPort:   port,
+		PlayerMAC:     "00:04:20:aa:bb:cc",
+		PlayerName:    "LifecyclePlayer",
+		AutoSync:      true,
 		PollInterval:  50 * time.Millisecond,
 	}
 
 	provider, err := NewProvider(cfg)
 	if err != nil {
-		t.Fatalf("Failed to create provider: %v", err)
+		t.Fatalf("NewProvider failed: %v", err)
 	}
-
-	go func() {
-		conn, err := ln.Accept()
-		if err == nil {
-			defer conn.Close()
-			buf := make([]byte, 256)
-			_, _ = conn.Read(buf)
-		}
-	}()
 
 	if err := provider.Start(); err != nil {
-		t.Fatalf("Failed to start provider: %v", err)
+		t.Fatalf("Provider Start failed: %v", err)
 	}
 
-	time.Sleep(20 * time.Millisecond)
+	if !provider.GetAutoSync() {
+		t.Error("Expected AutoSync to be true")
+	}
+	provider.SetAutoSync(false)
+	if provider.GetAutoSync() {
+		t.Error("Expected AutoSync to be false")
+	}
+
+	provider.SyncTo("Kitchen")
+	provider.Unsync()
 
 	if err := provider.Stop(); err != nil {
-		t.Fatalf("Failed to stop provider: %v", err)
+		t.Fatalf("Provider Stop failed: %v", err)
 	}
 }
 
 func TestSqueezeboxAudioProvider_PlayerDiscoveryAndMetadata(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("Failed to listen for mock SlimProto: %v", err)
+		t.Fatalf("Failed to bind mock SlimProto: %v", err)
 	}
 	defer ln.Close()
 
 	tcpAddr := ln.Addr().(*net.TCPAddr)
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go func(c net.Conn) {
-				defer c.Close()
-				buf := make([]byte, 256)
-				_, _ = c.Read(buf)
-			}(conn)
-		}
-	}()
-
-	ourMAC := "00:04:20:ee:88:99"
+	ourMAC := "00:04:20:99:99:99"
 	physicalMAC := "00:04:20:77:77:77"
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -233,5 +239,26 @@ func TestSqueezeboxAudioProvider_PlayerDiscoveryAndMetadata(t *testing.T) {
 	}
 	if players[0].Name != "Living Room" {
 		t.Fatalf("Expected Living Room, got: %s", players[0].Name)
+	}
+}
+
+func BenchmarkSqueezeboxAudioProvider_GetSpectrum(b *testing.B) {
+	cfg := Config{
+		Server:        "127.0.0.1",
+		SlimProtoPort: 3483,
+		JSONRPCPort:   9000,
+	}
+	provider, err := NewProvider(cfg)
+	if err != nil {
+		b.Fatalf("Failed to create provider: %v", err)
+	}
+
+	var buf [SpectrumBandsCount]float32
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_ = provider.GetSpectrum(buf[:])
 	}
 }

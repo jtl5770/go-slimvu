@@ -38,6 +38,7 @@ const MagicMACPrefix = "00:04:20:ee"
 // SqueezeboxAudioProvider implements AudioProvider using SlimProto and LMS JSON-RPC.
 type SqueezeboxAudioProvider struct {
 	levels    *AtomicLevels
+	spectrum  *AtomicSpectrum
 	proto     *slimproto.Client
 	playerMgr *control.PlayerManager
 }
@@ -157,6 +158,7 @@ func NewProvider(cfg Config) (*SqueezeboxAudioProvider, error) {
 	}
 
 	levels := NewAtomicLevels()
+	spectrum := NewAtomicSpectrum()
 	serverSlim := fmt.Sprintf("%s:%d", serverHost, slimProtoPort)
 	helo := slimproto.HeloConfig{
 		MAC:        mac,
@@ -166,7 +168,7 @@ func NewProvider(cfg Config) (*SqueezeboxAudioProvider, error) {
 		ModelName:  modelName,
 	}
 
-	protoClient := slimproto.NewClient(serverSlim, helo, levels)
+	protoClient := slimproto.NewClient(serverSlim, helo, levels, spectrum)
 
 	lmsClient := control.NewLMSClient(serverHost, jsonrpcPort)
 	mgrConfig := control.Config{
@@ -181,6 +183,7 @@ func NewProvider(cfg Config) (*SqueezeboxAudioProvider, error) {
 
 	return &SqueezeboxAudioProvider{
 		levels:    levels,
+		spectrum:  spectrum,
 		proto:     protoClient,
 		playerMgr: playerMgr,
 	}, nil
@@ -189,6 +192,12 @@ func NewProvider(cfg Config) (*SqueezeboxAudioProvider, error) {
 // GetLevels returns the latest left/right dB levels atomically (0 allocs).
 func (s *SqueezeboxAudioProvider) GetLevels() (leftDB, rightDB float64, playing bool) {
 	return s.levels.Get()
+}
+
+// GetSpectrum copies current 16-band spectrum levels into dst and returns the number of bands copied.
+// Operates lock-free, thread-safe, and with 0 heap allocations.
+func (s *SqueezeboxAudioProvider) GetSpectrum(dst []float32) int {
+	return s.spectrum.CopyTo(dst)
 }
 
 // Start starts the SlimProto client and PlayerManager.
