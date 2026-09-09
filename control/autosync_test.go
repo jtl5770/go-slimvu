@@ -19,6 +19,8 @@ package control
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -1290,4 +1292,89 @@ func TestPlayerManager_TransportCommandsTargetMasterWhenSlaved(t *testing.T) {
 	mu.Unlock()
 
 	mgr.Stop()
+}
+
+func TestPlayerManager_ConcurrentStatusFetch(t *testing.T) {
+	var mu sync.Mutex
+	statusQueries := make(map[string]int)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req JSONRPCRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		player := ""
+		if len(req.Params) > 0 {
+			if p, ok := req.Params[0].(string); ok {
+				player = p
+			}
+		}
+
+		var cmd string
+		if len(req.Params) > 1 {
+			if cmds, ok := req.Params[1].([]interface{}); ok && len(cmds) > 0 {
+				cmd = cmds[0].(string)
+			}
+		}
+
+		switch cmd {
+		case "players":
+			var playersLoop []map[string]interface{}
+			for i := 1; i <= 6; i++ {
+				playersLoop = append(playersLoop, map[string]interface{}{
+					"playerid": fmt.Sprintf("00:04:20:00:00:0%d", i),
+					"name":     fmt.Sprintf("Room %d", i),
+					"model":    "squeezebox",
+				})
+			}
+			resp := map[string]interface{}{
+				"result": map[string]interface{}{
+					"players_loop": playersLoop,
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+
+		case "status":
+			statusQueries[player]++
+			resp := map[string]interface{}{
+				"result": map[string]interface{}{
+					"player_name": fmt.Sprintf("Room %s", player),
+					"mode":        "pause",
+					"power":       1,
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"result": map[string]interface{}{}})
+		}
+	}))
+	defer ts.Close()
+
+	client := NewLMSClient(ts.Listener.Addr().(*net.TCPAddr).IP.String(), ts.Listener.Addr().(*net.TCPAddr).Port)
+	cfg := Config{
+		OurMAC:       "00:04:20:99:99:99",
+		PollInterval: 100 * time.Millisecond,
+	}
+
+	mgr := NewPlayerManager(client, cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, external, err := mgr.refreshState(ctx)
+	if err != nil {
+		t.Fatalf("refreshState failed: %v", err)
+	}
+
+	if len(external) != 6 {
+		t.Fatalf("Expected 6 external players, got %d", len(external))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(statusQueries) != 7 {
+		t.Fatalf("Expected status queries for 6 players, got %d: %+v", len(statusQueries), statusQueries)
+	}
 }

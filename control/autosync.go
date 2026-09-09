@@ -365,22 +365,40 @@ func (m *PlayerManager) refreshState(ctx context.Context) (*PlayerStatus, []Play
 		return nil, nil, err
 	}
 
+	fetchCtx, fetchCancel := context.WithTimeout(ctx, 3*time.Second)
+	defer fetchCancel()
+
+	statuses := make([]*PlayerStatus, len(playersList))
+	var wg sync.WaitGroup
+	wg.Add(len(playersList))
+
+	for i, p := range playersList {
+		go func(idx int, player PlayerInfo) {
+			defer wg.Done()
+			status, err := m.client.GetPlayerStatus(fetchCtx, player.PlayerID)
+			if err != nil || status == nil {
+				return
+			}
+			if player.Name != "" && (status.Name == "" || status.Matches(player.PlayerID)) {
+				status.Name = player.Name
+			}
+			if status.Model == "" {
+				status.Model = player.Model
+			}
+			if status.ModelName == "" {
+				status.ModelName = player.ModelName
+			}
+			statuses[idx] = status
+		}(i, p)
+	}
+	wg.Wait()
+
 	var allStatuses []PlayerStatus
 	var ourStatus *PlayerStatus
 
-	for _, p := range playersList {
-		status, err := m.client.GetPlayerStatus(ctx, p.PlayerID)
-		if err != nil || status == nil {
+	for _, status := range statuses {
+		if status == nil {
 			continue
-		}
-		if p.Name != "" && (status.Name == "" || status.Matches(p.PlayerID)) {
-			status.Name = p.Name
-		}
-		if status.Model == "" {
-			status.Model = p.Model
-		}
-		if status.ModelName == "" {
-			status.ModelName = p.ModelName
 		}
 		allStatuses = append(allStatuses, *status)
 		if m.isOurPlayer(*status) {
