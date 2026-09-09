@@ -43,9 +43,10 @@ type AudioRingBuffer struct {
 	writePos int
 	count    int
 
-	mu     sync.Mutex
-	cond   *sync.Cond
-	closed bool
+	mu             sync.Mutex
+	cond           *sync.Cond
+	writersWaiting int
+	closed         bool
 }
 
 // NewAudioRingBuffer creates an initialized AudioRingBuffer with the given capacity in bytes.
@@ -74,7 +75,9 @@ func (rb *AudioRingBuffer) Write(p []byte) (int, error) {
 			if rb.closed {
 				return totalWritten, ErrBufferClosed
 			}
+			rb.writersWaiting++
 			rb.cond.Wait()
+			rb.writersWaiting--
 		}
 
 		if rb.closed {
@@ -97,8 +100,6 @@ func (rb *AudioRingBuffer) Write(p []byte) (int, error) {
 		rb.writePos = (rb.writePos + chunk) % rb.size
 		rb.count += chunk
 		totalWritten += chunk
-
-		rb.cond.Broadcast()
 	}
 
 	return totalWritten, nil
@@ -129,7 +130,9 @@ func (rb *AudioRingBuffer) Read(p []byte) (int, error) {
 	rb.readPos = (rb.readPos + chunk) % rb.size
 	rb.count -= chunk
 
-	rb.cond.Broadcast()
+	if rb.writersWaiting > 0 {
+		rb.cond.Signal()
+	}
 	return chunk, nil
 }
 

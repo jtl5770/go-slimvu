@@ -96,6 +96,11 @@ type spectrumBuffers struct {
 	bot strings.Builder
 }
 
+type vuBarBuffers struct {
+	l strings.Builder
+	r strings.Builder
+}
+
 var (
 	styleBarLabel       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ECEFF4"))
 	styleBarVal         = lipgloss.NewStyle().Foreground(lipgloss.Color("#D8DEE9"))
@@ -257,6 +262,7 @@ type model struct {
 	showSpectrum  bool
 	spectrumBands [16]float32
 	specBuf       *spectrumBuffers
+	vuBuf         *vuBarBuffers
 
 	tickCount int
 }
@@ -366,6 +372,7 @@ func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64
 		autoSync:   autoSync,
 		popup:      newSyncPopup(),
 		specBuf:    &spectrumBuffers{},
+		vuBuf:      &vuBarBuffers{},
 		termWidth:  80,
 		termHeight: 24,
 	}
@@ -631,10 +638,21 @@ func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) st
 		}
 	}
 
-	var sb strings.Builder
+	isL := (label == "L")
+
+	var sb *strings.Builder
+	if m.vuBuf != nil {
+		if isL {
+			sb = &m.vuBuf.l
+		} else {
+			sb = &m.vuBuf.r
+		}
+		sb.Reset()
+	} else {
+		sb = &strings.Builder{}
+	}
 	sb.Grow(barLen*24 + 48)
 
-	isL := (label == "L")
 	if isL {
 		sb.WriteString(renderedLabelL)
 	} else {

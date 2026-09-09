@@ -52,13 +52,21 @@ var bandTiltDB = [16]float32{
 
 // SpectrumAnalyzer computes real-time 16-band spectrum measurements from continuous stereo PCM.
 // All working buffers are pre-allocated upfront, ensuring 100% zero heap allocations in the hot path.
+type bandBinRange struct {
+	kStart int
+	kEnd   int
+}
+
 type SpectrumAnalyzer struct {
-	ringBuf   [MaxRingBufferSize]float32
-	ringPos   int
-	realBuf   [MaxRingBufferSize]float32
-	imagBuf   [MaxRingBufferSize]float32
-	levels    [SpectrumBandsCount]float32
-	decayRate float32
+	ringBuf        [MaxRingBufferSize]float32
+	ringPos        int
+	realBuf        [MaxRingBufferSize]float32
+	imagBuf        [MaxRingBufferSize]float32
+	levels         [SpectrumBandsCount]float32
+	decayRate      float32
+	lastSampleRate uint32
+	lastN          int
+	bandRanges     [SpectrumBandsCount]bandBinRange
 }
 
 // NewSpectrumAnalyzer creates an initialized SpectrumAnalyzer with silence (-100 dBFS).
@@ -159,9 +167,8 @@ func (s *SpectrumAnalyzer) applyWindow(n int, plan *fftPlan) {
 	}
 }
 
-// aggregateBands computes peak energy per band, converts to dBFS without runtime sqrt,
-// and applies attack and decay ballistics.
-func (s *SpectrumAnalyzer) aggregateBands(n int, sampleRate uint32, plan *fftPlan, decay float32) {
+// updateBandRanges precalculates FFT bin boundaries for all 16 bands whenever sample rate or FFT size changes.
+func (s *SpectrumAnalyzer) updateBandRanges(n int, sampleRate uint32) {
 	deltaF := float64(sampleRate) / float64(n)
 	halfN := n / 2
 
@@ -177,10 +184,25 @@ func (s *SpectrumAnalyzer) aggregateBands(n int, sampleRate uint32, plan *fftPla
 		if kEnd > halfN {
 			kEnd = halfN
 		}
+		s.bandRanges[b] = bandBinRange{kStart: kStart, kEnd: kEnd}
+	}
+	s.lastSampleRate = sampleRate
+	s.lastN = n
+}
+
+// aggregateBands computes peak energy per band, converts to dBFS without runtime sqrt,
+// and applies attack and decay ballistics.
+func (s *SpectrumAnalyzer) aggregateBands(n int, sampleRate uint32, plan *fftPlan, decay float32) {
+	if sampleRate != s.lastSampleRate || n != s.lastN {
+		s.updateBandRanges(n, sampleRate)
+	}
+
+	for b := 0; b < SpectrumBandsCount; b++ {
+		br := s.bandRanges[b]
 
 		// Sum power across all bins in this band (ANSI fractional-octave integrated energy)
 		var sumMagSq float32
-		for k := kStart; k <= kEnd; k++ {
+		for k := br.kStart; k <= br.kEnd; k++ {
 			sumMagSq += s.realBuf[k]*s.realBuf[k] + s.imagBuf[k]*s.imagBuf[k]
 		}
 
