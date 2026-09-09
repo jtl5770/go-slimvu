@@ -18,6 +18,7 @@
 package control
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -1137,4 +1138,156 @@ func TestPlayerManager_DynamicSetAutoSync(t *testing.T) {
 	if !mgr.GetAutoSync() {
 		t.Errorf("Expected GetAutoSync to return true after SetAutoSync(true)")
 	}
+}
+
+func TestPlayerManager_TransportCommandsTargetMasterWhenSlaved(t *testing.T) {
+	var mu sync.Mutex
+	ourMAC := "00:04:20:ee:12:34"
+	masterMAC := "02:00:cb:4a:d8:0a"
+	slaved := false
+
+	var lastTarget string
+	var lastCmd string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req JSONRPCRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		target := req.Params[0].(string)
+		var cmd string
+		if len(req.Params) > 1 {
+			if cmds, ok := req.Params[1].([]interface{}); ok && len(cmds) > 0 {
+				cmd = cmds[0].(string)
+			}
+		}
+
+		lastTarget = target
+		lastCmd = cmd
+
+		switch cmd {
+		case "players":
+			resp := map[string]interface{}{
+				"players_loop": []map[string]interface{}{
+					{"playerid": ourMAC, "name": "SlimVU"},
+					{"playerid": masterMAC, "name": "Wohnung"},
+				},
+			}
+			data, _ := json.Marshal(resp)
+			_ = json.NewEncoder(w).Encode(JSONRPCResponse{Result: data})
+		case "status":
+			sm := ""
+			if slaved {
+				sm = masterMAC
+			}
+			resp := map[string]interface{}{
+				"mode":        "play",
+				"sync_master": sm,
+			}
+			data, _ := json.Marshal(resp)
+			_ = json.NewEncoder(w).Encode(JSONRPCResponse{Result: data})
+		default:
+			_ = json.NewEncoder(w).Encode(JSONRPCResponse{Result: []byte("{}")})
+		}
+	}))
+	defer ts.Close()
+
+	client := &LMSClient{
+		endpoint:   ts.URL,
+		httpClient: ts.Client(),
+	}
+
+	cfg := Config{
+		OurMAC:       ourMAC,
+		OurName:      "SlimVU",
+		AutoSync:     false,
+		PollInterval: 20 * time.Millisecond,
+	}
+
+	mgr := NewPlayerManager(client, cfg)
+	mgr.Start()
+	time.Sleep(50 * time.Millisecond)
+
+	ctx := context.Background()
+
+	// 1. Standalone: transport commands should target ourMAC
+	_ = mgr.TogglePause(ctx)
+	mu.Lock()
+	if lastTarget != ourMAC || lastCmd != "pause" {
+		t.Fatalf("Expected standalone TogglePause to target %s, got target=%s cmd=%s", ourMAC, lastTarget, lastCmd)
+	}
+	mu.Unlock()
+
+	_ = mgr.Play(ctx)
+	mu.Lock()
+	if lastTarget != ourMAC || lastCmd != "play" {
+		t.Fatalf("Expected standalone Play to target %s, got target=%s cmd=%s", ourMAC, lastTarget, lastCmd)
+	}
+	mu.Unlock()
+
+	_ = mgr.StopPlayback(ctx)
+	mu.Lock()
+	if lastTarget != ourMAC || lastCmd != "stop" {
+		t.Fatalf("Expected standalone StopPlayback to target %s, got target=%s cmd=%s", ourMAC, lastTarget, lastCmd)
+	}
+	mu.Unlock()
+
+	_ = mgr.Next(ctx)
+	mu.Lock()
+	if lastTarget != ourMAC || lastCmd != "playlist" {
+		t.Fatalf("Expected standalone Next to target %s, got target=%s cmd=%s", ourMAC, lastTarget, lastCmd)
+	}
+	mu.Unlock()
+
+	_ = mgr.Previous(ctx)
+	mu.Lock()
+	if lastTarget != ourMAC || lastCmd != "playlist" {
+		t.Fatalf("Expected standalone Previous to target %s, got target=%s cmd=%s", ourMAC, lastTarget, lastCmd)
+	}
+	mu.Unlock()
+
+	// 2. Slaved: update mock status so our player reports masterMAC
+	mu.Lock()
+	slaved = true
+	mu.Unlock()
+	time.Sleep(60 * time.Millisecond) // Wait for poll cycle to refresh status
+
+	_ = mgr.TogglePause(ctx)
+	mu.Lock()
+	if lastTarget != masterMAC || lastCmd != "pause" {
+		t.Fatalf("Expected slaved TogglePause to target %s, got target=%s cmd=%s", masterMAC, lastTarget, lastCmd)
+	}
+	mu.Unlock()
+
+	_ = mgr.Play(ctx)
+	mu.Lock()
+	if lastTarget != masterMAC || lastCmd != "play" {
+		t.Fatalf("Expected slaved Play to target %s, got target=%s cmd=%s", masterMAC, lastTarget, lastCmd)
+	}
+	mu.Unlock()
+
+	_ = mgr.StopPlayback(ctx)
+	mu.Lock()
+	if lastTarget != masterMAC || lastCmd != "stop" {
+		t.Fatalf("Expected slaved StopPlayback to target %s, got target=%s cmd=%s", masterMAC, lastTarget, lastCmd)
+	}
+	mu.Unlock()
+
+	_ = mgr.Next(ctx)
+	mu.Lock()
+	if lastTarget != masterMAC || lastCmd != "playlist" {
+		t.Fatalf("Expected slaved Next to target %s, got target=%s cmd=%s", masterMAC, lastTarget, lastCmd)
+	}
+	mu.Unlock()
+
+	_ = mgr.Previous(ctx)
+	mu.Lock()
+	if lastTarget != masterMAC || lastCmd != "playlist" {
+		t.Fatalf("Expected slaved Previous to target %s, got target=%s cmd=%s", masterMAC, lastTarget, lastCmd)
+	}
+	mu.Unlock()
+
+	mgr.Stop()
 }

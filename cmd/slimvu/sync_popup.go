@@ -153,6 +153,18 @@ func (p *syncPopup) AnyPlayerPlaying() bool {
 	return false
 }
 
+func (p *syncPopup) findMasterName(masterMAC string) string {
+	for _, pl := range p.players {
+		if pl.Matches(masterMAC) {
+			if pl.Name != "" {
+				return pl.Name
+			}
+			return pl.PlayerID
+		}
+	}
+	return masterMAC
+}
+
 func isPlayerSelectable(p slimvu.PlayerStatus, autoSync bool, anyPlaying bool) bool {
 	if p.IsStopped() {
 		return false
@@ -326,6 +338,19 @@ func (p syncPopup) RenderBox(termWidth int, autoSync bool, syncedMAC, syncedName
 			var line1 string
 			var line2 string
 
+			var rawLine2 string
+			var isSlaveNote bool
+
+			if player.IsSlaved() {
+				masterName := p.findMasterName(player.SyncMaster)
+				rawLine2 = fmt.Sprintf("(synced to %s)", masterName)
+				isSlaveNote = true
+			} else if !selectable {
+				rawLine2 = "Not selectable"
+			} else {
+				rawLine2 = formatTrackText(player.GetTrackInfo())
+			}
+
 			if isFocused {
 				bgCol := lipgloss.Color("#262B35")
 				caretStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#88C0D0")).Bold(true).Background(bgCol)
@@ -343,31 +368,22 @@ func (p syncPopup) RenderBox(termWidth int, autoSync bool, syncedMAC, syncedName
 				leadStyle := lipgloss.NewStyle().Background(bgCol)
 				ttrailStyle := lipgloss.NewStyle().Background(bgCol)
 
-				if !selectable {
-					hintStyle := helpStyle.Background(bgCol)
-					trailSpaces := innerW - 2 - lipgloss.Width("Not selectable")
-					if trailSpaces < 0 {
-						trailSpaces = 0
-					}
-					line2 = fmt.Sprintf("%s%s%s",
-						leadStyle.Render("  "),
-						hintStyle.Render("Not selectable"),
-						ttrailStyle.Render(strings.Repeat(" ", trailSpaces)),
-					)
+				displayTrack := renderScrollingOrTruncated(rawLine2, availTrackW, true, tickCount)
+				var trackStyle lipgloss.Style
+				if !selectable && !isSlaveNote {
+					trackStyle = helpStyle.Background(bgCol)
 				} else {
-					rawTrack := formatTrackText(player.GetTrackInfo())
-					displayTrack := renderScrollingOrTruncated(rawTrack, availTrackW, true, tickCount)
-					trackStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#81A1C1")).Background(bgCol)
-					trailSpaces := innerW - 2 - lipgloss.Width(displayTrack)
-					if trailSpaces < 0 {
-						trailSpaces = 0
-					}
-					line2 = fmt.Sprintf("%s%s%s",
-						leadStyle.Render("  "),
-						trackStyle.Render(displayTrack),
-						ttrailStyle.Render(strings.Repeat(" ", trailSpaces)),
-					)
+					trackStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#81A1C1")).Background(bgCol)
 				}
+				trailSpaces := innerW - 2 - lipgloss.Width(displayTrack)
+				if trailSpaces < 0 {
+					trailSpaces = 0
+				}
+				line2 = fmt.Sprintf("%s%s%s",
+					leadStyle.Render("  "),
+					trackStyle.Render(displayTrack),
+					ttrailStyle.Render(strings.Repeat(" ", trailSpaces)),
+				)
 			} else {
 				caretStyle := lipgloss.NewStyle()
 				line1 = fmt.Sprintf("%s%s%s%s",
@@ -377,13 +393,8 @@ func (p syncPopup) RenderBox(termWidth int, autoSync bool, syncedMAC, syncedName
 					statusStyle.Render(badgeRendered),
 				)
 
-				if !selectable {
-					line2 = "  " + helpStyle.Render("Not selectable")
-				} else {
-					rawTrack := formatTrackText(player.GetTrackInfo())
-					displayTrack := renderScrollingOrTruncated(rawTrack, availTrackW, false, tickCount)
-					line2 = "  " + helpStyle.Render(displayTrack)
-				}
+				displayTrack := renderScrollingOrTruncated(rawLine2, availTrackW, false, tickCount)
+				line2 = "  " + helpStyle.Render(displayTrack)
 			}
 
 			content.WriteString(line1)

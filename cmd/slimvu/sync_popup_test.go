@@ -178,3 +178,55 @@ func TestSyncPopup_RenderAndOverlay(t *testing.T) {
 		t.Error("overlay missing background header line")
 	}
 }
+
+func TestSyncPopup_SlavePlayerShowsSyncedToMasterNote(t *testing.T) {
+	popup := newSyncPopup()
+	groupMAC := "02:00:cb:4a:d8:0a"
+	livingroomMAC := "00:04:20:22:b6:dc"
+	kitchenMAC := "00:04:20:2c:73:f6"
+	bedroomMAC := "00:04:20:23:d1:a1"
+
+	players := []slimvu.PlayerStatus{
+		{
+			PlayerID: groupMAC,
+			Name:     "Wohnung",
+			Mode:     "play",
+		},
+		{
+			PlayerID:   livingroomMAC,
+			Name:       "Livingroom",
+			Mode:       "play",
+			SyncMaster: groupMAC,
+			PlaylistLoop: []control.PlaylistTrack{
+				{Artist: "Artist1", Title: "Track1"},
+			},
+		},
+		{
+			PlayerID:   kitchenMAC,
+			Name:       "Kitchen",
+			Mode:       "pause",
+			SyncMaster: groupMAC,
+		},
+		{
+			PlayerID: bedroomMAC,
+			Name:     "Bedroom",
+			Mode:     "play",
+			PlaylistLoop: []control.PlaylistTrack{
+				{Artist: "Solo Artist", Title: "Solo Track"},
+			},
+		},
+	}
+
+	popup.Open(players)
+	box := popup.RenderBox(80, false, "", "", 0)
+
+	// Both slave players (playing Livingroom and paused Kitchen) should display (synced to Wohnung)
+	if !strings.Contains(box, "(synced to Wohnung)") {
+		t.Errorf("Expected popup to contain \"(synced to Wohnung)\", got:\n%s", box)
+	}
+
+	// Standalone player Bedroom should show its own track info
+	if !strings.Contains(box, "Solo Artist") {
+		t.Errorf("Expected popup to contain standalone trackinfo \"Solo Artist\", got:\n%s", box)
+	}
+}

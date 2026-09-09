@@ -237,29 +237,41 @@ func (m *PlayerManager) GetArtwork(ctx context.Context, artworkURL, coverID stri
 	return m.client.GetArtwork(ctx, artworkURL, coverID, m.cfg.OurMAC)
 }
 
+// commandTargetMAC returns the MAC address of the player that transport commands should be directed to.
+// If our player is slaved to a sync master, commands are routed directly to the sync master so that
+// group controllers (like LMS-Groups) receive commands on the group master rather than a slave member.
+func (m *PlayerManager) commandTargetMAC() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.ourPlayer.IsSlaved() && m.ourPlayer.SyncMaster != "" {
+		return m.ourPlayer.SyncMaster
+	}
+	return m.cfg.OurMAC
+}
+
 // Next skips to the next track.
 func (m *PlayerManager) Next(ctx context.Context) error {
-	return m.client.Next(ctx, m.cfg.OurMAC)
+	return m.client.Next(ctx, m.commandTargetMAC())
 }
 
 // Previous skips to the previous track.
 func (m *PlayerManager) Previous(ctx context.Context) error {
-	return m.client.Previous(ctx, m.cfg.OurMAC)
+	return m.client.Previous(ctx, m.commandTargetMAC())
 }
 
-// TogglePause toggles play/pause on our player.
+// TogglePause toggles play/pause on our player or active sync master.
 func (m *PlayerManager) TogglePause(ctx context.Context) error {
-	return m.client.TogglePause(ctx, m.cfg.OurMAC)
+	return m.client.TogglePause(ctx, m.commandTargetMAC())
 }
 
-// Play starts playback on our player.
+// Play starts playback on our player or active sync master.
 func (m *PlayerManager) Play(ctx context.Context) error {
-	return m.client.Play(ctx, m.cfg.OurMAC)
+	return m.client.Play(ctx, m.commandTargetMAC())
 }
 
-// StopPlayback stops playback on our player.
+// StopPlayback stops playback on our player or active sync master.
 func (m *PlayerManager) StopPlayback(ctx context.Context) error {
-	return m.client.Stop(ctx, m.cfg.OurMAC)
+	return m.client.Stop(ctx, m.commandTargetMAC())
 }
 
 func (m *PlayerManager) isOurPlayer(p PlayerStatus) bool {
