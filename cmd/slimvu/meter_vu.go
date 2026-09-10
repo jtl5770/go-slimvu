@@ -18,15 +18,15 @@
 package main
 
 import (
-	"fmt"
 	"math"
 	"strings"
 )
 
 var (
-	scaleTickDBs = [...]float64{-60, -48, -36, -24, -18, -12, -6, -3, 0}
-	subBlocks    = [9]string{"", "\u258f", "\u258e", "\u258d", "\u258c", "\u258b", "\u258a", "\u2589", "\u2588"}
-	scaleCache   [128]string
+	scaleTickDBs     = [...]float64{-60, -48, -36, -24, -18, -12, -6, -3, 0}
+	subBlocks        = [9]string{"", "\u258f", "\u258e", "\u258d", "\u258c", "\u258b", "\u258a", "\u2589", "\u2588"}
+	scaleCache       [128]string
+	ansiBarValPrefix = "\x1b[38;2;216;222;233m" // lipgloss #D8DEE9
 )
 
 type vuBarBuffers struct {
@@ -34,7 +34,69 @@ type vuBarBuffers struct {
 	r strings.Builder
 }
 
-func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) string {
+// writeDBValue formats and appends the 9-character decibel readout (e.g. " -12.3 dB" or " -inf  dB")
+// directly into the provided strings.Builder with zero heap allocations.
+func writeDBValue(sb *strings.Builder, db, minDB float64, isPlaying bool) {
+	if !isPlaying || db <= minDB {
+		sb.WriteString(renderedValInf)
+		return
+	}
+
+	if db > 99.9 {
+		db = 99.9
+	} else if db < -999.9 {
+		db = -999.9
+	}
+
+	neg := false
+	if db < 0 {
+		neg = true
+		db = -db
+	}
+
+	val := int(math.Round(db * 10.0))
+	dec := val % 10
+	integer := val / 10
+
+	var digits [8]byte
+	pos := len(digits)
+
+	pos--
+	digits[pos] = byte('0' + dec)
+	pos--
+	digits[pos] = '.'
+
+	if integer == 0 {
+		pos--
+		digits[pos] = '0'
+	} else {
+		for integer > 0 {
+			pos--
+			digits[pos] = byte('0' + (integer % 10))
+			integer /= 10
+		}
+	}
+
+	if neg {
+		pos--
+		digits[pos] = '-'
+	}
+
+	numChars := len(digits) - pos
+	pad := 6 - numChars
+
+	sb.WriteString(ansiBarValPrefix)
+	for i := 0; i < pad; i++ {
+		sb.WriteByte(' ')
+	}
+	for i := pos; i < len(digits); i++ {
+		sb.WriteByte(digits[i])
+	}
+	sb.WriteString(" dB")
+	sb.WriteString(ansiReset)
+}
+
+func (m model) renderBar(label string, db float64, textDB float64, peak peakInfo, barLen int) string {
 	clampedDB := math.Min(m.maxDB, math.Max(m.minDB, db))
 	level := (clampedDB - m.minDB) / (m.maxDB - m.minDB)
 	barPos := level * float64(barLen)
@@ -121,12 +183,8 @@ func (m model) renderBar(label string, db float64, peak peakInfo, barLen int) st
 		}
 	}
 
-	sb.WriteString(" ")
-	if !m.playing || db <= m.minDB {
-		sb.WriteString(renderedValInf)
-	} else {
-		sb.WriteString(styleBarVal.Render(fmt.Sprintf("%6.1f dB", db)))
-	}
+	sb.WriteString("  ")
+	writeDBValue(sb, textDB, m.minDB, m.playing)
 
 	return sb.String()
 }
@@ -152,7 +210,7 @@ func renderScale(barLen int, minDB, maxDB float64) string {
 	}
 
 	indent := strings.Repeat(" ", 3) // "L  " = 3
-	res := indent + styleScale.Render(string(scaleLine))
+	res := indent + styleScale.Render(string(scaleLine)) + strings.Repeat(" ", 11)
 	if barLen >= 0 && barLen < len(scaleCache) {
 		scaleCache[barLen] = res
 	}

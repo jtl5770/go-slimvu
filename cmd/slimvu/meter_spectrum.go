@@ -54,8 +54,10 @@ type spectrumLUTEntry struct {
 	bottom spectrumCell
 }
 
-var spectrumLUT [17]spectrumLUTEntry
-var spectrumScaleCache [128]string
+var (
+	spectrumLUT        [17]spectrumLUTEntry
+	spectrumScaleCache [128]string
+)
 
 type spectrumBuffers struct {
 	top strings.Builder
@@ -161,6 +163,8 @@ func renderSpectrumScale(barLen int) string {
 		writeSpaces(&sb, trailingPad)
 	}
 
+	writeSpaces(&sb, 11)
+
 	indent := "   " // "   " matching "L  " = 3
 	res := indent + styleScale.Render(sb.String())
 	if barLen >= 0 && barLen < len(spectrumScaleCache) {
@@ -250,9 +254,12 @@ func (m model) renderSpectrum(barLen int) (string, string, string) {
 		writeSpaces(&m.specBuf.bot, trailingPad)
 	}
 
-	// Suffix spacing to maintain totalWidth = barLen + 13
-	writeSpaces(&m.specBuf.top, 10)
-	writeSpaces(&m.specBuf.bot, 10)
+	// Suffix spacing and smoothed dB readout to match VU meter format
+	m.specBuf.top.WriteString("  ")
+	writeDBValue(&m.specBuf.top, m.smoothLeftDB, m.minDB, m.playing)
+
+	m.specBuf.bot.WriteString("  ")
+	writeDBValue(&m.specBuf.bot, m.smoothRightDB, m.minDB, m.playing)
 
 	topLine := m.specBuf.top.String()
 	botLine := m.specBuf.bot.String()

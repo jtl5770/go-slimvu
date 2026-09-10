@@ -1,10 +1,10 @@
 # go-slimvu
 
-High-performance, pure Go virtual Squeezebox / Logitech Media Server (LMS) audio level provider and VU meter engine.
+High-performance, pure Go virtual Squeezebox / Logitech Media Server (LMS) audio level provider, VU meter, and real-time spectrum analyzer engine.
 
 ![slimvu TUI](assets/screencast.webp)
 
-`go-slimvu` emulates a hardware Squeezebox player over the **SlimProto** protocol, decodes incoming audio streams in real time with high-precision sample pacing, and exposes lock-free, zero-allocation left/right stereo RMS decibel levels for LED visualizers, displays, terminal visualizers, and audio monitors.
+`go-slimvu` emulates a hardware Squeezebox player over the **SlimProto** protocol, decodes incoming audio streams in real time with high-precision sample pacing, and exposes lock-free, zero-allocation left/right stereo RMS decibel levels and 16-band real-time frequency spectrum data for LED visualizers, displays, terminal visualizers, and audio monitors.
 
 ## Features
 
@@ -17,18 +17,21 @@ High-performance, pure Go virtual Squeezebox / Logitech Media Server (LMS) audio
   - **Opus** (Ogg/Opus container decoding via `pion/opus`)
   - **PCM / Raw** (Big/Little endian, 8/16/24/32-bit linear PCM)
 - **High-Precision Clock Pacing**: Micro-paused sample consumption driven by system clock jiffies to stay in sync with multi-room audio zones.
-- **Zero-Allocation Level Metering**: Lock-free atomic packed integers (`AtomicLevels`) for real-time reads at 30–60+ FPS without garbage collection pressure or heap allocations.
+- **Zero-Allocation Metering & Spectrum Analysis**: Lock-free atomic packed integers (`AtomicLevels`) and atomic 32-bit floats (`AtomicSpectrum`) for real-time reads at 30–60+ FPS without garbage collection pressure or heap allocations.
+- **Real-Time 16-Band Spectrum Analyzer**: Fast FFT-based logarithmic frequency analysis (20 Hz – 20 kHz), Hann windowing, sample-rate adaptive FFT windows (2048 to 8192 points), ANSI fractional-octave energy aggregation, spectral tilt compensation (+0.5 dB/band), and smooth attack/decay ballistics.
 - **LMS UDP Auto-Discovery**: Automatically locates Logitech Media Server instances on the local network (IPv4 UDP broadcast `e/E` probe).
 - **Intelligent AutoSync**: Automatically queries LMS via JSON-RPC to slave the virtual VU player to any currently playing physical player in the house, following playlist changes and room migrations dynamically.
 - **Rich Terminal UI (`slimvu`)**:
   - Real-time 60 FPS stereo RMS decibel meter with smooth peak-hold decay and 8× sub-pixel block resolution (`▏` through `█`).
+  - Real-time 16-band frequency spectrum analyzer with 16-step vertical block resolution (` ` through `█`), logarithmic frequency labels (25 Hz to 20 kHz), and smooth ballistics decay.
+  - Seamless toggle (`t`) between the Stereo VU Meter and Spectrum Analyzer visualization modes.
   - Full-color album cover art thumbnail rendered via 2×2 Unicode quadrant sub-pixel clustering with automatic terminal cell aspect ratio compensation.
   - Interactive popup modal (`s`) for manual multi-room zone targeting.
   - Live metadata tracking (`Artist · Album · Title`, elapsed/total duration, track number) with marquee scrolling.
 
 ## Used By
 
-- [**GoLEDS**](https://github.com/jtl5770/goleds) — A flexible concurrent lighting system and reactive LED strip controller that uses `go-slimvu` to drive live stereo RMS decibel visualizers and multi-room audio sync.
+- [**GoLEDS**](https://github.com/jtl5770/goleds) — A flexible concurrent lighting system and reactive LED strip controller that uses `go-slimvu` to drive live stereo RMS decibel visualizers, spectrum visualizers, and multi-room audio sync.
 
 ## Installation
 
@@ -44,7 +47,7 @@ go install github.com/jtl5770/go-slimvu/cmd/slimvu@latest
 
 ## Running the Terminal UI (`slimvu`)
 
-Launch `slimvu` to automatically discover your LMS server, synchronize to the currently playing room, and display the live stereo VU meter with album artwork:
+Launch `slimvu` to automatically discover your LMS server, synchronize to the currently playing room, and display the live stereo VU meter or spectrum analyzer with album artwork:
 
 ```bash
 slimvu
@@ -54,6 +57,7 @@ slimvu
 
 | Key | Action |
 | --- | --- |
+| `t` | Toggle between Stereo VU Meter and 16-Band Spectrum Analyzer |
 | `Space` | Toggle Play / Pause on active player |
 | `←` / `→` | Previous / Next track |
 | `s` | Open interactive popup to manually select sync target |
@@ -97,7 +101,7 @@ Usage of slimvu:
 ## LMS Group Players Plugin
 
 If you are using the LMS **Group Players** plugin (`LMS-Groups` by philippe44) to create virtual group players, external/virtual players like SlimVU can synchronize to the group master:
-- In LMS Web UI, navigate to P**lugins -> Group Players**.
+- In LMS Web UI, navigate to **Plugins -> Group Players**.
 - Enable the option **"Synchronize to Group Players"**.
 - With this enabled, SlimVU can slave directly to the Group Player entity and receive synced audio streams when the group is playing.
 
@@ -112,6 +116,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jtl5770/go-slimvu"
@@ -140,18 +145,42 @@ func main() {
 	ticker := time.NewTicker(16 * time.Millisecond) // ~60 FPS
 	defer ticker.Stop()
 
+	// Pre-allocated destination buffer for 16-band spectrum data (0 allocations in loop)
+	var spectrum [slimvu.SpectrumBandsCount]float32
+	bars := []rune{' ', ' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
+
 	for range ticker.C {
+		// 1. Read instantaneous stereo RMS decibel levels
 		leftDB, rightDB, isPlaying := provider.GetLevels()
 		if !isPlaying {
 			continue
 		}
+
+		// 2. Read 16-band frequency spectrum (dBFS, lock-free, zero-allocation)
+		numBands := provider.GetSpectrum(spectrum[:])
 
 		prefix := ""
 		if track, ok := provider.GetTrackInfo(); ok {
 			prefix = fmt.Sprintf("[%s - %s]: ", track.Artist, track.Title)
 		}
 
-		fmt.Printf("%s%6.1f dB | %6.1f dB\n", prefix, leftDB, rightDB)
+		// Format VU levels
+		vuStr := fmt.Sprintf("L:%5.1f dB | R:%5.1f dB", leftDB, rightDB)
+
+		// Format simple visualizer for the 16 frequency bands (-60 dBFS to 0 dBFS)
+		var specBar strings.Builder
+		for i := 0; i < numBands; i++ {
+			val := spectrum[i]
+			idx := int((val + 60.0) / 60.0 * float32(len(bars)-1))
+			if idx < 0 {
+				idx = 0
+			} else if idx >= len(bars) {
+				idx = len(bars) - 1
+			}
+			specBar.WriteRune(bars[idx])
+		}
+
+		fmt.Printf("%s%s | Spectrum: %s\n", prefix, vuStr, specBar.String())
 	}
 }
 ```
@@ -171,32 +200,43 @@ type Config struct {
 }
 ```
 
+### Core Interfaces & Types
+
+- **`slimvu.AudioProvider`**: Composite interface uniting `slimvu.LevelsProvider`, `slimvu.SpectrumProvider`, and lifecycle control (`Start()`, `Stop()`).
+- **`slimvu.LevelsProvider`**: Exposes `GetLevels() (leftDB, rightDB float64, playing bool)`.
+- **`slimvu.SpectrumProvider`**: Exposes `GetSpectrum(dst []float32) int`.
+- **`slimvu.SpectrumBandsCount`**: Constant defining the 16 logarithmic frequency bands (`20 Hz` to `20 kHz`).
+- **`slimvu.AtomicLevels`**: Packed 64-bit atomic integer container guaranteeing zero-allocation, lock-free level reads and writes.
+- **`slimvu.AtomicSpectrum`**: Atomic 32-bit float array container guaranteeing zero-allocation, lock-free 16-band spectrum reads and writes.
+
 ### Full API Reference
 
 #### Core Lifecycle & Metering
-- **`provider.Start() error`**
+- **`provider.Start() error`**  
   Starts background workers, connects to LMS over SlimProto, and performs the initial player discovery. *Must be called prior to querying levels or player state.*
-- **`provider.Stop() error`**
+- **`provider.Stop() error`**  
   Gracefully unsyncs from any active sync group, closes the SlimProto audio connection, and stops all background workers.
-- **`provider.GetLevels() (leftDB, rightDB float64, playing bool)`**
+- **`provider.GetLevels() (leftDB, rightDB float64, playing bool)`**  
   Lock-free, zero-allocation read of instantaneous stereo audio levels (in dBFS, e.g. `-100.0 dB` silence up to `0.0 dB` full-scale).
+- **`provider.GetSpectrum(dst []float32) int`**  
+  Lock-free, zero-allocation read of instantaneous 16-band frequency spectrum levels (in dBFS, e.g. `-100.0 dBFS` silence up to `0.0 dBFS` full-scale). Copies up to 16 bands into `dst` and returns the number of bands copied.
 
 #### Player Discovery & Status
-- **`provider.GetAllPlayers() []control.PlayerStatus`**
+- **`provider.GetAllPlayers() []control.PlayerStatus`**  
   Returns a snapshot of all external physical and group players currently connected to LMS (virtual SlimVU instances are automatically filtered). Automatically updates in real time when players disconnect or power down.
-- **`provider.GetOurPlayer() control.PlayerStatus`**
+- **`provider.GetOurPlayer() control.PlayerStatus`**  
   Returns the current status of the local virtual player.
-- **`provider.GetSyncedPlayer() (mac, name string)`**
+- **`provider.SyncedWith() (mac, name string)`**  
   Returns the MAC address and friendly name of the master player SlimVU is currently slaved to (or `("", "")` if standalone).
-- **`provider.GetTrackInfo() (control.TrackInfo, bool)`**
+- **`provider.GetTrackInfo() (control.TrackInfo, bool)`**  
   Returns metadata for the currently playing track (`Title`, `Artist`, `Album`, `Duration`, `Elapsed`, `CoverID`, `ArtworkURL`, etc.).
 
 #### Multi-Room Zone Synchronization
-- **`provider.SyncTo(target string)`**
+- **`provider.SyncTo(target string)`**  
   Manually syncs the virtual player to a specific target player (by name or MAC address).
-- **`provider.Unsync()`**
+- **`provider.Unsync()`**  
   Detaches SlimVU from its current sync group.
-- **`provider.SetAutoSync(enabled bool)`** / **`provider.GetAutoSync() bool`**
+- **`provider.SetAutoSync(enabled bool)`** / **`provider.GetAutoSync() bool`**  
   Dynamically enables or disables automatic zone following.
 
 #### Playback Controls & Media Artwork
@@ -205,9 +245,9 @@ type Config struct {
 - **`provider.StopPlayback(ctx context.Context) error`**
 - **`provider.Next(ctx context.Context) error`**
 - **`provider.Previous(ctx context.Context) error`**
-- **`provider.GetArtwork(ctx context.Context, artworkURL, coverID string) ([]byte, error)`**
+- **`provider.GetArtwork(ctx context.Context, artworkURL, coverID string) ([]byte, error)`**  
   Fetches raw JPEG/PNG cover artwork image bytes directly from LMS.
-- **`provider.GetServerInfo() (host string, slimProtoPort, jsonRPCPort int)`**
+- **`provider.GetServerInfo() (host string, slimProtoPort, jsonRPCPort int)`**  
   Returns the resolved server host and network ports.
 
 ## Running Tests

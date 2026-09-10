@@ -51,14 +51,16 @@ type model struct {
 	peakLeft  peakInfo
 	peakRight peakInfo
 
-	leftDB     float64
-	rightDB    float64
-	playing    bool
-	syncedMAC  string
-	syncedName string
-	autoSync   bool
-	track      slimvu.TrackInfo
-	hasTrack   bool
+	leftDB        float64
+	rightDB       float64
+	smoothLeftDB  float64
+	smoothRightDB float64
+	playing       bool
+	syncedMAC     string
+	syncedName    string
+	autoSync      bool
+	track         slimvu.TrackInfo
+	hasTrack      bool
 
 	cachedTrackKey   string
 	cachedRawTitle   string
@@ -119,23 +121,25 @@ func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64
 	}
 
 	return model{
-		provider:   provider,
-		minDB:      minDB,
-		maxDB:      maxDB,
-		fps:        fps,
-		holdTime:   holdTime,
-		decayRate:  decayRate,
-		showCover:  showCover,
-		cellAspect: cellAspect,
-		lastUpdate: time.Now(),
-		leftDB:     minDB,
-		rightDB:    minDB,
-		autoSync:   autoSync,
-		popup:      newSyncPopup(),
-		specBuf:    &spectrumBuffers{},
-		vuBuf:      &vuBarBuffers{},
-		termWidth:  80,
-		termHeight: 24,
+		provider:      provider,
+		minDB:         minDB,
+		maxDB:         maxDB,
+		fps:           fps,
+		holdTime:      holdTime,
+		decayRate:     decayRate,
+		showCover:     showCover,
+		cellAspect:    cellAspect,
+		lastUpdate:    time.Now(),
+		leftDB:        minDB,
+		rightDB:       minDB,
+		smoothLeftDB:  minDB,
+		smoothRightDB: minDB,
+		autoSync:      autoSync,
+		popup:         newSyncPopup(),
+		specBuf:       &spectrumBuffers{},
+		vuBuf:         &vuBarBuffers{},
+		termWidth:     80,
+		termHeight:    24,
 	}
 }
 
@@ -269,6 +273,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.provider != nil {
 			m.provider.GetSpectrum(m.spectrumBands[:])
 		}
+
+		// Smooth dB readouts for human readability (~300ms time constant)
+		if !m.playing {
+			m.smoothLeftDB = m.minDB
+			m.smoothRightDB = m.minDB
+		} else {
+			alpha := 1.0 - math.Exp(-dt/0.3)
+			if alpha > 1.0 {
+				alpha = 1.0
+			}
+			if m.smoothLeftDB <= m.minDB {
+				m.smoothLeftDB = m.leftDB
+			} else {
+				m.smoothLeftDB += alpha * (m.leftDB - m.smoothLeftDB)
+			}
+			if m.smoothRightDB <= m.minDB {
+				m.smoothRightDB = m.rightDB
+			} else {
+				m.smoothRightDB += alpha * (m.rightDB - m.smoothRightDB)
+			}
+		}
+
 		m.syncedMAC, m.syncedName = m.provider.SyncedWith()
 		m.autoSync = m.provider.GetAutoSync()
 		m.track, m.hasTrack = m.provider.GetTrackInfo()
@@ -365,33 +391,53 @@ func (m model) renderCoverArt() string {
 	return styleCoverBorder.Render(strings.Join(lines, "\n"))
 }
 
-func (m model) View() string {
-	barLen := m.getBarLength()
-	totalWidth := barLen + 13
-
-	var statusStr string
-	if m.playing {
-		statusStr = renderedStatusPlaying
-	} else {
-		statusStr = renderedStatusIdle
-	}
-
+func (m model) renderHeader(totalWidth int) string {
 	titlePrefix := "Squeezebox Stereo VU Meter"
 	if m.showSpectrum {
 		titlePrefix = "Squeezebox 16-Band Spectrum"
 	}
+	leftStr := styleHeaderTitle.Render(titlePrefix)
+	leftLen := len([]rune(titlePrefix))
 
-	var header string
-	if m.syncedName != "" {
-		syncedStr := styleSynced.Render(m.syncedName)
-		header = styleHeaderTitle.Render(fmt.Sprintf("%s — %s  •  Synced to: %s", titlePrefix, statusStr, syncedStr))
-	} else if m.syncedMAC != "" {
-		syncedStr := styleSynced.Render(m.syncedMAC)
-		header = styleHeaderTitle.Render(fmt.Sprintf("%s — %s  •  Synced to: %s", titlePrefix, statusStr, syncedStr))
+	var statusStr string
+	var statusVisibleLen int
+	if m.playing {
+		statusStr = renderedStatusPlaying
+		statusVisibleLen = len([]rune("● PLAYING"))
 	} else {
-		header = styleHeaderTitle.Render(fmt.Sprintf("%s — %s", titlePrefix, statusStr))
+		statusStr = renderedStatusIdle
+		statusVisibleLen = len([]rune("■ IDLE"))
 	}
 
+	target := m.syncedName
+	if target == "" {
+		target = m.syncedMAC
+	}
+
+	var rightStr string
+	var rightLen int
+	if target != "" {
+		syncedTargetStr := styleSynced.Render(target)
+		rightStr = fmt.Sprintf("%s%s%s%s", statusStr, styleSep, styleHelp.Render("Synced to: "), syncedTargetStr)
+		rightLen = statusVisibleLen + len([]rune(" • Synced to: ")) + len([]rune(target))
+	} else {
+		rightStr = statusStr
+		rightLen = statusVisibleLen
+	}
+
+	spacing := totalWidth - (leftLen + rightLen)
+	if spacing < 1 {
+		spacing = 1
+	}
+
+	return fmt.Sprintf("%s%s%s", leftStr, strings.Repeat(" ", spacing), rightStr)
+}
+
+func (m model) View() string {
+	barLen := m.getBarLength()
+	totalWidth := barLen + 14
+
+	header := m.renderHeader(totalWidth)
 	trackLine := m.renderTrackInfo(totalWidth)
 
 	var line1 string
@@ -401,8 +447,8 @@ func (m model) View() string {
 	if m.showSpectrum {
 		line1, line2, scale = m.renderSpectrum(barLen)
 	} else {
-		line1 = m.renderBar("L", m.leftDB, m.peakLeft, barLen)
-		line2 = m.renderBar("R", m.rightDB, m.peakRight, barLen)
+		line1 = m.renderBar("L", m.leftDB, m.smoothLeftDB, m.peakLeft, barLen)
+		line2 = m.renderBar("R", m.rightDB, m.smoothRightDB, m.peakRight, barLen)
 		scale = renderScale(barLen, m.minDB, m.maxDB)
 	}
 

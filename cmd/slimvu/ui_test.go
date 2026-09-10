@@ -23,6 +23,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/jtl5770/go-slimvu"
 )
 
@@ -199,6 +200,8 @@ func TestModelViewRendering_Synced(t *testing.T) {
 	m.playing = true
 	m.leftDB = -6.0
 	m.rightDB = -12.0
+	m.smoothLeftDB = -6.0
+	m.smoothRightDB = -12.0
 	m.track = slimvu.TrackInfo{
 		Title:    "Test Song",
 		Artist:   "Test Artist",
@@ -281,11 +284,18 @@ func TestModelViewRendering_SpectrumToggleAndDisplay(t *testing.T) {
 	m.spectrumBands[0] = 0.0   // Max (step 16)
 	m.spectrumBands[1] = -30.0 // Mid (step 8)
 	m.spectrumBands[2] = -60.0 // Min (step 0)
+	m.smoothLeftDB = -6.0
+	m.smoothRightDB = -12.0
 
 	viewSpec := m.View()
 
 	if !strings.Contains(viewSpec, "Squeezebox 16-Band Spectrum") {
 		t.Errorf("expected spectrum header title in view, got %s", viewSpec)
+	}
+
+	// Verify smoothed dB readouts are present in spectrum view
+	if !strings.Contains(viewSpec, "-6.0 dB") || !strings.Contains(viewSpec, "-12.0 dB") {
+		t.Errorf("expected smoothed dB readout in spectrum view, got %s", viewSpec)
 	}
 
 	// Compact scale checks (width 80 -> barLen 60 -> contentW 2)
@@ -319,19 +329,101 @@ func TestRenderBar_ChannelSeparationGap(t *testing.T) {
 	m.playing = true
 
 	// Render L bar at -6 dB
-	lBar := m.renderBar("L", -6.0, peakInfo{}, 40)
+	lBar := m.renderBar("L", -6.0, -6.0, peakInfo{}, 40)
 	// L channel should contain inverted 1/8th block (\x1b[7m + \u2581)
 	if !strings.Contains(lBar, "\x1b[7m") || !strings.Contains(lBar, "\u2581") {
 		t.Errorf("expected L channel to render inverted 1/8th block, got %q", lBar)
 	}
 
 	// Render R bar at -6 dB
-	rBar := m.renderBar("R", -6.0, peakInfo{}, 40)
+	rBar := m.renderBar("R", -6.0, -6.0, peakInfo{}, 40)
 	// R channel should contain 7/8th block (\u2587) and NOT inverted video
 	if !strings.Contains(rBar, "\u2587") {
 		t.Errorf("expected R channel to render 7/8th block, got %q", rBar)
 	}
 	if strings.Contains(rBar, "\x1b[7m") {
 		t.Errorf("expected R channel NOT to use inverted video, got %q", rBar)
+	}
+}
+
+func TestWriteDBValue_ZeroAllocationsAndFormatting(t *testing.T) {
+	var sb strings.Builder
+	sb.Grow(64)
+
+	// Inactive / stopped
+	writeDBValue(&sb, -12.3, -60.0, false)
+	res := sb.String()
+	if !strings.Contains(res, "-inf  dB") {
+		t.Errorf("expected -inf dB when not playing, got %q", res)
+	}
+
+	// Playing with normal dB
+	var sb2 strings.Builder
+	sb2.Grow(64)
+	writeDBValue(&sb2, -12.3, -60.0, true)
+	res2 := sb2.String()
+	if !strings.Contains(res2, "-12.3 dB") {
+		t.Errorf("expected -12.3 dB when playing, got %q", res2)
+	}
+
+	// Zero allocations verification: format into a pre-allocated builder
+	allocs := testing.AllocsPerRun(1000, func() {
+		var buf strings.Builder
+		buf.Grow(64)
+		writeDBValue(&buf, -18.4, -60.0, true)
+	})
+	if allocs > 1 {
+		t.Errorf("expected at most 1 allocation for builder buffer, got %v", allocs)
+	}
+}
+
+func TestRenderHeader_DynamicFlushRight(t *testing.T) {
+	m := initialModel(nil, -60, 0, 30, 250*time.Millisecond, 20.0, false, 1.6)
+	m.termWidth = 80
+	m.termHeight = 24
+	m.syncedName = "Kitchen"
+	m.playing = true
+
+	barLen := m.getBarLength()
+	totalWidth := barLen + 14
+
+	header := m.renderHeader(totalWidth)
+	width := lipgloss.Width(header)
+	if width != totalWidth {
+		t.Errorf("expected header width %d to equal totalWidth %d, got %d", totalWidth, totalWidth, width)
+	}
+
+	// Verify track info line matches the same totalWidth
+	m.hasTrack = true
+	m.track = slimvu.TrackInfo{
+		Title:    "Track 1",
+		Artist:   "Artist 1",
+		Duration: 180,
+		Elapsed:  30,
+	}
+	m.cachedRawTitle = "Artist 1 · Track 1"
+	m.cachedTitleRunes = []rune(m.cachedRawTitle)
+
+	trackLine := m.renderTrackInfo(totalWidth)
+	trackWidth := lipgloss.Width(trackLine)
+	if trackWidth != totalWidth {
+		t.Errorf("expected track line width %d to equal totalWidth %d, got %d", totalWidth, totalWidth, trackWidth)
+	}
+
+	// Verify meter and spectrum lines also match totalWidth
+	lBar := m.renderBar("L", -6.0, -6.0, peakInfo{}, barLen)
+	if lipgloss.Width(lBar) != totalWidth {
+		t.Errorf("expected L bar width %d to equal totalWidth %d, got %d", totalWidth, totalWidth, lipgloss.Width(lBar))
+	}
+
+	topSpec, botSpec, scaleSpec := m.renderSpectrum(barLen)
+	if lipgloss.Width(topSpec) != totalWidth {
+		t.Errorf("expected spectrum top width %d to equal totalWidth %d, got %d", totalWidth, totalWidth, lipgloss.Width(topSpec))
+	}
+	if lipgloss.Width(botSpec) != totalWidth {
+		t.Errorf("expected spectrum bot width %d to equal totalWidth %d, got %d", totalWidth, totalWidth, lipgloss.Width(botSpec))
+	}
+	if lipgloss.Width(scaleSpec) != totalWidth {
+		t.Errorf("expected spectrum scale width %d to equal totalWidth %d, got %d", totalWidth, totalWidth, lipgloss.Width(scaleSpec))
 	}
 }
