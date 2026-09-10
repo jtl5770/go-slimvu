@@ -20,9 +20,10 @@ High-performance, pure Go virtual Squeezebox / Logitech Media Server (LMS) audio
 - **Zero-Allocation Metering & Spectrum Analysis**: Lock-free atomic packed integers (`AtomicLevels`) and atomic 32-bit floats (`AtomicSpectrum`) for real-time reads at 30–60+ FPS without garbage collection pressure or heap allocations.
 - **Real-Time 16-Band Spectrum Analyzer**: Fast FFT-based logarithmic frequency analysis (20 Hz – 20 kHz), Hann windowing, sample-rate adaptive FFT windows (2048 to 8192 points), ANSI fractional-octave energy aggregation, spectral tilt compensation (+0.5 dB/band), and smooth attack/decay ballistics.
 - **LMS UDP Auto-Discovery**: Automatically locates Logitech Media Server instances on the local network (IPv4 UDP broadcast `e/E` probe).
-- **Intelligent AutoSync**: Automatically queries LMS via JSON-RPC to slave the virtual VU player to any currently playing physical player in the house, following playlist changes and room migrations dynamically.
+- **Intelligent AutoSync & Sync Group Master Resolution**: Automatically slaves the virtual player to any active physical player or sync group in the house. When targeting a player that is part of a sync group, `go-slimvu` automatically resolves and slaves to the **sync master** of that group, dynamically tracking playlist changes and room migrations.
+- **Direct Playback Command Forwarding**: Play, pause, previous, and next track commands are forwarded directly to the currently synced-to physical player or sync master.
 - **Rich Terminal UI (`slimvu`)**:
-  - Real-time 60 FPS stereo RMS decibel meter with smooth peak-hold decay and 8× sub-pixel block resolution (`▏` through `█`).
+  - Real-time 60 FPS stereo RMS decibel meter with smooth peak-hold decay, smoothed human-readable text decibel readouts, and 8× sub-pixel block resolution (`▏` through `█`).
   - Real-time 16-band frequency spectrum analyzer with 16-step vertical block resolution (` ` through `█`), logarithmic frequency labels (25 Hz to 20 kHz), and smooth ballistics decay.
   - Seamless toggle (`t`) between the Stereo VU Meter and Spectrum Analyzer visualization modes.
   - Full-color album cover art thumbnail rendered via 2×2 Unicode quadrant sub-pixel clustering with automatic terminal cell aspect ratio compensation.
@@ -58,11 +59,13 @@ slimvu
 | Key | Action |
 | --- | --- |
 | `t` | Toggle between Stereo VU Meter and 16-Band Spectrum Analyzer |
-| `Space` | Toggle Play / Pause on active player |
-| `←` / `→` | Previous / Next track |
+| `Space` | Toggle Play / Pause on the currently synced player |
+| `←` / `→` | Previous / Next track on the currently synced player |
 | `s` | Open interactive popup to manually select sync target |
 | `a` | Toggle AutoSync automation on/off |
 | `q` / `Ctrl+C` | Quit |
+
+> **Note on Playback Controls**: Playback control commands (`Space`, `←`, `→`) are sent directly to the physical player (or sync group master) that `slimvu` is currently synced with, allowing you to control the active room directly from the terminal.
 
 ### CLI Options
 
@@ -97,6 +100,16 @@ Usage of slimvu:
   -log string
         File path to write debug/info logs (disabled by default)
 ```
+
+## Multi-Room Synchronization & Sync Groups
+
+### Sync Master Resolution
+When synchronizing to a player in Logitech Media Server:
+- If the selected player is standalone, `go-slimvu` synchronizes directly to that player.
+- If the selected player is part of an active LMS **sync group** (synchronized with other players), `go-slimvu` automatically resolves and synchronizes to the **sync master** (`sync_master`) of the group. This ensures that the virtual player reliably joins the group's common SlimProto broadcast stream and stays in perfect lockstep with all synchronized rooms.
+
+### Playback Command Forwarding
+All playback control methods (`Play()`, `TogglePause()`, `StopPlayback()`, `Next()`, `Previous()`) dynamically resolve the active sync target. When `go-slimvu` is synced to a zone, calling these methods sends JSON-RPC transport commands directly to the synced-to player or group master, allowing remote control of the physical audio playback.
 
 ## LMS Group Players Plugin
 
@@ -233,18 +246,23 @@ type Config struct {
 
 #### Multi-Room Zone Synchronization
 - **`provider.SyncTo(target string)`**  
-  Manually syncs the virtual player to a specific target player (by name or MAC address).
+  Manually syncs the virtual player to a specific target player (by friendly name or MAC address). If the target player belongs to an LMS sync group, `go-slimvu` automatically synchronizes to the group's `sync_master`.
 - **`provider.Unsync()`**  
   Detaches SlimVU from its current sync group.
 - **`provider.SetAutoSync(enabled bool)`** / **`provider.GetAutoSync() bool`**  
   Dynamically enables or disables automatic zone following.
 
 #### Playback Controls & Media Artwork
-- **`provider.Play(ctx context.Context) error`**
-- **`provider.TogglePause(ctx context.Context) error`**
-- **`provider.StopPlayback(ctx context.Context) error`**
-- **`provider.Next(ctx context.Context) error`**
-- **`provider.Previous(ctx context.Context) error`**
+- **`provider.Play(ctx context.Context) error`**  
+  Sends the play command to the currently synced target player / sync master.
+- **`provider.TogglePause(ctx context.Context) error`**  
+  Toggles play / pause state on the currently synced target player / sync master.
+- **`provider.StopPlayback(ctx context.Context) error`**  
+  Stops playback on the currently synced target player / sync master.
+- **`provider.Next(ctx context.Context) error`**  
+  Skips to the next track on the currently synced target player / sync master.
+- **`provider.Previous(ctx context.Context) error`**  
+  Restarts the current track or skips to the previous track on the currently synced target player / sync master.
 - **`provider.GetArtwork(ctx context.Context, artworkURL, coverID string) ([]byte, error)`**  
   Fetches raw JPEG/PNG cover artwork image bytes directly from LMS.
 - **`provider.GetServerInfo() (host string, slimProtoPort, jsonRPCPort int)`**  
@@ -258,7 +276,10 @@ go test -v -race ./...
 
 ## Acknowledgments
 
-Special thanks to the [**Squeezelite**](https://github.com/ralph-irving/squeezelite) project (by Adrian Smith and Ralph Irving). The SlimProto network state machine, sample pacing calculations, and protocol implementation details in this project were inspired by and modeled after their pioneering C codebase.
+- Special thanks to the [**Squeezelite**](https://github.com/ralph-irving/squeezelite) project (by Adrian Smith and Ralph Irving). The SlimProto network state machine, sample pacing calculations, and protocol implementation details in this project were inspired by and modeled after their pioneering C codebase.
+- Built for the [Logitech Media Server / Lyrion Music Server](https://lyrion.org/) ecosystem.
+- Terminal UI powered by [Bubble Tea](https://github.com/charmbracelet/bubbletea) and [Lip Gloss](https://github.com/charmbracelet/lipgloss).
+- Audio decoding powered by `mewkiz/flac`, `hajimehoshi/go-mp3`, `skrashevich/go-aac`, `jfreymuth/oggvorbis`, and `pion/opus`.
 
 ## License
 
