@@ -20,7 +20,7 @@ High-performance, pure Go virtual Squeezebox / Logitech Media Server (LMS) audio
 - **Zero-Allocation Metering & Spectrum Analysis**: Lock-free atomic packed integers (`AtomicLevels`) and atomic 32-bit floats (`AtomicSpectrum`) for real-time reads at 30–60+ FPS without garbage collection pressure or heap allocations.
 - **Real-Time 16-Band Spectrum Analyzer**: Fast FFT-based logarithmic frequency analysis (20 Hz – 20 kHz), Hann windowing, sample-rate adaptive FFT windows (2048 to 8192 points), ANSI fractional-octave energy aggregation, spectral tilt compensation (+0.5 dB/band), and smooth attack/decay ballistics.
 - **LMS UDP Auto-Discovery**: Automatically locates Logitech Media Server instances on the local network (IPv4 UDP broadcast `e/E` probe).
-- **Intelligent AutoSync & Sync Group Master Resolution**: Automatically slaves the virtual player to any active physical player or sync group in the house. When targeting a player that is part of a sync group, `go-slimvu` automatically resolves and slaves to the **sync master** of that group, dynamically tracking playlist changes and room migrations.
+- **Intelligent AutoSync & Sync Group Master Resolution**: Automatically syncs the virtual player to any active physical player or sync group in the house. When targeting a player that is part of a sync group, `go-slimvu` automatically resolves and syncs to the **sync master** of that group, dynamically tracking playlist changes and room migrations.
 - **Direct Playback Command Forwarding**: Play, pause, previous, and next track commands are forwarded directly to the currently synced-to physical player or sync master.
 - **Rich Terminal UI (`slimvu`)**:
   - Real-time 60 FPS stereo RMS decibel meter with smooth peak-hold decay, smoothed human-readable text decibel readouts, and 8× sub-pixel block resolution (`▏` through `█`).
@@ -116,7 +116,7 @@ All playback control methods (`Play()`, `TogglePause()`, `StopPlayback()`, `Next
 If you are using the LMS **Group Players** plugin (`LMS-Groups` by philippe44) to create virtual group players, external/virtual players like SlimVU can synchronize to the group master:
 - In LMS Web UI, navigate to **Plugins -> Group Players**.
 - Enable the option **"Synchronize to Group Players"**.
-- With this enabled, SlimVU can slave directly to the Group Player entity and receive synced audio streams when the group is playing.
+- With this enabled, SlimVU can sync directly to the Group Player entity and receive synced audio streams when the group is playing.
 
 ## Library SDK Guide
 
@@ -207,7 +207,7 @@ type Config struct {
     JSONRPCPort    int           // JSON-RPC port (0 = auto-discover / default 9000)
     PlayerName     string        // Name reported to LMS (default: "SlimVU")
     PlayerMAC      string        // MAC address string, or "auto"
-    AutoSync       bool          // Automatically slave to active playing rooms
+    AutoSync       bool          // Automatically sync to active playing rooms
     IgnoredPlayers []string      // Names/MACs to exclude from AutoSync targeting
     PollInterval   time.Duration // LMS status poll interval (default: 500ms)
 }
@@ -240,7 +240,7 @@ type Config struct {
 - **`provider.GetOurPlayer() control.PlayerStatus`**  
   Returns the current status of the local virtual player.
 - **`provider.SyncedWith() (mac, name string)`**  
-  Returns the MAC address and friendly name of the master player SlimVU is currently slaved to (or `("", "")` if standalone).
+  Returns the MAC address and friendly name of the master player SlimVU is currently synced to (or `("", "")` if standalone).
 - **`provider.GetTrackInfo() (control.TrackInfo, bool)`**  
   Returns metadata for the currently playing track (`Title`, `Artist`, `Album`, `Duration`, `Elapsed`, `CoverID`, `ArtworkURL`, etc.).
 
