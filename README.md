@@ -18,7 +18,7 @@ High-performance, pure Go virtual Squeezebox / Logitech Media Server (LMS) audio
   - **PCM / Raw** (Big/Little endian, 8/16/24/32-bit linear PCM)
 - **High-Precision Clock Pacing**: Micro-paused sample consumption driven by system clock jiffies to stay in sync with multi-room audio zones.
 - **Zero-Allocation Metering & Spectrum Analysis**: Lock-free atomic packed integers (`AtomicLevels`) and atomic 32-bit floats (`AtomicSpectrum`) for real-time reads at 30–60+ FPS without garbage collection pressure or heap allocations.
-- **Real-Time 16-Band Spectrum Analyzer**: Fast FFT-based logarithmic frequency analysis (20 Hz – 20 kHz), Hann windowing, sample-rate adaptive FFT windows (2048 to 8192 points), ANSI fractional-octave energy aggregation, spectral tilt compensation (+0.5 dB/band), and smooth attack/decay ballistics.
+- **Real-Time 16-Band Stereo Spectrum Analyzer**: Fast FFT-based logarithmic frequency analysis (20 Hz – 20 kHz), Hann windowing, sample-rate adaptive FFT windows (2048 to 8192 points), ANSI fractional-octave energy aggregation, spectral tilt compensation (+0.5 dB/band), and smooth attack/decay ballistics.
 - **LMS UDP Auto-Discovery**: Automatically locates Logitech Media Server instances on the local network (IPv4 UDP broadcast `e/E` probe).
 - **Intelligent AutoSync & Sync Group Master Resolution**: Automatically syncs the virtual player to any active physical player or sync group in the house. When targeting a player that is part of a sync group, `go-slimvu` automatically resolves and syncs to the **sync master** of that group, dynamically tracking playlist changes and room migrations.
 - **Direct Playback Command Forwarding**: Play, pause, previous, and next track commands are forwarded directly to the currently synced-to physical player or sync master.
@@ -88,7 +88,7 @@ Usage of slimvu:
   -cell-aspect float
         Terminal character cell aspect ratio Height/Width (0.0 for auto-detect)
   -fps int
-        UI refresh rate in FPS (default 60)
+        UI refresh rate in FPS (default 30)
   -hold int
         Peak hold time in milliseconds (default 250)
   -decay float
@@ -155,11 +155,14 @@ func main() {
 	}
 	defer provider.Stop()
 
+	// Enable 16-band stereo spectrum FFT computation (bypassed by default to save CPU)
+	provider.SetSpectrumEnabled(true)
+
 	ticker := time.NewTicker(16 * time.Millisecond) // ~60 FPS
 	defer ticker.Stop()
 
-	// Pre-allocated destination buffer for 16-band spectrum data (0 allocations in loop)
-	var spectrum [slimvu.SpectrumBandsCount]float32
+	// Pre-allocated destination buffers for 16-band stereo spectrum data (0 allocations in loop)
+	var specLeft, specRight [slimvu.SpectrumBandsCount]float32
 	bars := []rune{' ', ' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
 
 	for range ticker.C {
@@ -169,8 +172,8 @@ func main() {
 			continue
 		}
 
-		// 2. Read 16-band frequency spectrum (dBFS, lock-free, zero-allocation)
-		numBands := provider.GetSpectrum(spectrum[:])
+		// 2. Read 16-band stereo frequency spectrum (dBFS, lock-free, zero-allocation)
+		numBands := provider.GetSpectrum(specLeft[:], specRight[:])
 
 		prefix := ""
 		if track, ok := provider.GetTrackInfo(); ok {
@@ -181,9 +184,10 @@ func main() {
 		vuStr := fmt.Sprintf("L:%5.1f dB | R:%5.1f dB", leftDB, rightDB)
 
 		// Format simple visualizer for the 16 frequency bands (-60 dBFS to 0 dBFS)
+		// by averaging Left and Right channels: (L+R)/2
 		var specBar strings.Builder
 		for i := 0; i < numBands; i++ {
-			val := spectrum[i]
+			val := (specLeft[i] + specRight[i]) / 2.0
 			idx := int((val + 60.0) / 60.0 * float32(len(bars)-1))
 			if idx < 0 {
 				idx = 0
@@ -217,10 +221,10 @@ type Config struct {
 
 - **`slimvu.AudioProvider`**: Composite interface uniting `slimvu.LevelsProvider`, `slimvu.SpectrumProvider`, and lifecycle control (`Start()`, `Stop()`).
 - **`slimvu.LevelsProvider`**: Exposes `GetLevels() (leftDB, rightDB float64, playing bool)`.
-- **`slimvu.SpectrumProvider`**: Exposes `GetSpectrum(dst []float32) int`.
+- **`slimvu.SpectrumProvider`**: Exposes `GetSpectrum(dstLeft, dstRight []float32) int`, `SetSpectrumEnabled(enabled bool)`, and `IsSpectrumEnabled() bool`.
 - **`slimvu.SpectrumBandsCount`**: Constant defining the 16 logarithmic frequency bands (`20 Hz` to `20 kHz`).
 - **`slimvu.AtomicLevels`**: Packed 64-bit atomic integer container guaranteeing zero-allocation, lock-free level reads and writes.
-- **`slimvu.AtomicSpectrum`**: Atomic 32-bit float array container guaranteeing zero-allocation, lock-free 16-band spectrum reads and writes.
+- **`slimvu.AtomicSpectrum`**: Atomic 32-bit float array container guaranteeing zero-allocation, lock-free 16-band stereo spectrum reads and writes.
 
 ### Full API Reference
 
@@ -231,8 +235,10 @@ type Config struct {
   Gracefully unsyncs from any active sync group, closes the SlimProto audio connection, and stops all background workers.
 - **`provider.GetLevels() (leftDB, rightDB float64, playing bool)`**  
   Lock-free, zero-allocation read of instantaneous stereo audio levels (in dBFS, e.g. `-100.0 dB` silence up to `0.0 dB` full-scale).
-- **`provider.GetSpectrum(dst []float32) int`**  
-  Lock-free, zero-allocation read of instantaneous 16-band frequency spectrum levels (in dBFS, e.g. `-100.0 dBFS` silence up to `0.0 dBFS` full-scale). Copies up to 16 bands into `dst` and returns the number of bands copied.
+- **`provider.GetSpectrum(dstLeft, dstRight []float32) int`**  
+  Lock-free, zero-allocation read of instantaneous 16-band stereo frequency spectrum levels (in dBFS, e.g. `-100.0 dBFS` silence up to `0.0 dBFS` full-scale). Copies up to 16 bands into `dstLeft` and `dstRight` and returns the number of bands copied per channel.
+- **`provider.SetSpectrumEnabled(enabled bool)`** / **`provider.IsSpectrumEnabled() bool`**  
+  Dynamically enables or disables the 16-band FFT spectrum computation. When disabled, the FFT analysis loop is completely bypassed to conserve CPU, and spectrum outputs return silence (-100 dBFS). Disabled by default.
 
 #### Player Discovery & Status
 - **`provider.GetAllPlayers() []control.PlayerStatus`**  

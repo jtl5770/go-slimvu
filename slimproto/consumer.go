@@ -20,12 +20,13 @@ package slimproto
 import (
 	"context"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/jtl5770/go-slimvu/dsp"
 )
 
-// ConsumerCallbacks provides access to player state and telemetry for the PacedConsumer.
+// ConsumerCallbacks abstracts control notifications and state queries from PacedConsumer.
 type ConsumerCallbacks interface {
 	GetState() PlaybackState
 	SetState(s PlaybackState)
@@ -35,22 +36,23 @@ type ConsumerCallbacks interface {
 	DeductPauseFrames(frames int64)
 	AddFramesPlayed(frames uint64)
 	IsDecoderDone() bool
-	SendStat(event StatEvent) error
+	SendStat(event [4]byte) error
 }
 
 // PacedConsumerConfig defines configuration for PacedConsumer.
 type PacedConsumerConfig struct {
-	TickInterval time.Duration
-	RingBuffer   *AudioRingBuffer
-	Levels       *AtomicLevels
-	Spectrum     *AtomicSpectrum
-	Clock        Clock
-	Callbacks    ConsumerCallbacks
+	TickInterval    time.Duration
+	RingBuffer      *AudioRingBuffer
+	Levels          *AtomicLevels
+	Spectrum        *AtomicSpectrum
+	SpectrumEnabled bool
+	Clock           Clock
+	Callbacks       ConsumerCallbacks
 }
 
 // PacedConsumer drains PCM audio samples from the AudioRingBuffer in real-time,
 // synchronizes jiffies timestamps, deducts micro-pause frames, detects underruns,
-// and feeds RMS dB audio level measurements into AtomicLevels and 16-band spectrum
+// and feeds RMS dB audio level measurements into AtomicLevels and 16-band stereo spectrum
 // measurements into AtomicSpectrum.
 type PacedConsumer struct {
 	tickInterval time.Duration
@@ -61,9 +63,12 @@ type PacedConsumer struct {
 	clock        Clock
 	callbacks    ConsumerCallbacks
 
+	spectrumEnabled atomic.Bool
+
 	chunkBuf         []byte
 	frameAccumulator float64
-	bandsBuf         [dsp.SpectrumBandsCount]float32
+	bandsBufLeft     [dsp.SpectrumBandsCount]float32
+	bandsBufRight    [dsp.SpectrumBandsCount]float32
 }
 
 // NewPacedConsumer creates an initialized PacedConsumer.
@@ -76,7 +81,7 @@ func NewPacedConsumer(cfg PacedConsumerConfig) *PacedConsumer {
 	if clock == nil {
 		clock = NewSystemClock()
 	}
-	return &PacedConsumer{
+	pc := &PacedConsumer{
 		tickInterval: interval,
 		ringBuffer:   cfg.RingBuffer,
 		levels:       cfg.Levels,
@@ -86,6 +91,31 @@ func NewPacedConsumer(cfg PacedConsumerConfig) *PacedConsumer {
 		callbacks:    cfg.Callbacks,
 		chunkBuf:     make([]byte, 65536),
 	}
+	pc.spectrumEnabled.Store(cfg.SpectrumEnabled)
+	return pc
+}
+
+// SetSpectrumEnabled dynamically enables or disables 16-band stereo spectrum FFT computation.
+// When disabled, the FFT analysis is completely bypassed to save CPU, and spectrum levels are reset to silence.
+func (p *PacedConsumer) SetSpectrumEnabled(enabled bool) {
+	p.spectrumEnabled.Store(enabled)
+	if !enabled {
+		if p.analyzer != nil {
+			p.analyzer.Reset()
+		}
+		if p.spectrum != nil {
+			var silence [dsp.SpectrumBandsCount]float32
+			for i := range silence {
+				silence[i] = float32(dsp.SilenceFloorDB)
+			}
+			p.spectrum.Set(&silence, &silence)
+		}
+	}
+}
+
+// IsSpectrumEnabled reports whether spectrum FFT computation is currently active.
+func (p *PacedConsumer) IsSpectrumEnabled() bool {
+	return p.spectrumEnabled.Load()
 }
 
 // Run executes the continuous audio consumption loop until ctx is canceled.
@@ -160,9 +190,9 @@ func (p *PacedConsumer) Step(dt time.Duration) {
 			leftDB, rightDB := dsp.CalculateLevels(p.chunkBuf[:n])
 			p.levels.Set(leftDB, rightDB, true)
 
-			if p.spectrum != nil && p.analyzer != nil {
-				p.analyzer.Process(p.chunkBuf[:n], sr, dtSec, &p.bandsBuf)
-				p.spectrum.Set(&p.bandsBuf)
+			if p.spectrum != nil && p.analyzer != nil && p.spectrumEnabled.Load() {
+				p.analyzer.Process(p.chunkBuf[:n], sr, dtSec, &p.bandsBufLeft, &p.bandsBufRight)
+				p.spectrum.Set(&p.bandsBufLeft, &p.bandsBufRight)
 			}
 		} else {
 			// Buffer underrun
@@ -183,9 +213,9 @@ func (p *PacedConsumer) Step(dt time.Duration) {
 // applySilence sets levels to silence (-100 dBFS, playing=false) and decays spectrum bands.
 func (p *PacedConsumer) applySilence(dtSec float32) {
 	p.levels.Set(-100, -100, false)
-	if p.spectrum != nil && p.analyzer != nil {
-		p.analyzer.DecaySilence(dtSec, &p.bandsBuf)
-		p.spectrum.Set(&p.bandsBuf)
+	if p.spectrum != nil && p.analyzer != nil && p.spectrumEnabled.Load() {
+		p.analyzer.DecaySilence(dtSec, &p.bandsBufLeft, &p.bandsBufRight)
+		p.spectrum.Set(&p.bandsBufLeft, &p.bandsBufRight)
 	}
 }
 
@@ -196,4 +226,11 @@ func (p *PacedConsumer) Reset() {
 		p.analyzer.Reset()
 	}
 	p.applySilence(0)
+	if p.spectrum != nil {
+		var silence [dsp.SpectrumBandsCount]float32
+		for i := range silence {
+			silence[i] = float32(dsp.SilenceFloorDB)
+		}
+		p.spectrum.Set(&silence, &silence)
+	}
 }

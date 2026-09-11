@@ -25,15 +25,18 @@ import (
 
 func TestAtomicSpectrum_InitialSilence(t *testing.T) {
 	as := NewAtomicSpectrum()
-	var buf [SpectrumBandsCount]float32
-	n := as.CopyTo(buf[:])
+	var bufL, bufR [SpectrumBandsCount]float32
+	n := as.CopyTo(bufL[:], bufR[:])
 	if n != SpectrumBandsCount {
 		t.Fatalf("Expected %d bands copied, got %d", SpectrumBandsCount, n)
 	}
 
-	for i, v := range buf {
-		if v != -100.0 {
-			t.Errorf("Band %d: expected -100.0, got %.2f", i, v)
+	for i := 0; i < SpectrumBandsCount; i++ {
+		if bufL[i] != -100.0 {
+			t.Errorf("Left Band %d: expected -100.0, got %.2f", i, bufL[i])
+		}
+		if bufR[i] != -100.0 {
+			t.Errorf("Right Band %d: expected -100.0, got %.2f", i, bufR[i])
 		}
 	}
 }
@@ -41,46 +44,53 @@ func TestAtomicSpectrum_InitialSilence(t *testing.T) {
 func TestAtomicSpectrum_SetAndCopy(t *testing.T) {
 	as := NewAtomicSpectrum()
 
-	var testLevels [SpectrumBandsCount]float32
-	for i := range testLevels {
-		testLevels[i] = float32(-10.0 + float32(i))
+	var testLevelsL, testLevelsR [SpectrumBandsCount]float32
+	for i := range testLevelsL {
+		testLevelsL[i] = float32(-10.0 + float32(i))
+		testLevelsR[i] = float32(-20.0 - float32(i))
 	}
 
-	as.Set(&testLevels)
+	as.Set(&testLevelsL, &testLevelsR)
 
-	var dst [SpectrumBandsCount]float32
-	n := as.CopyTo(dst[:])
+	var dstL, dstR [SpectrumBandsCount]float32
+	n := as.CopyTo(dstL[:], dstR[:])
 	if n != SpectrumBandsCount {
 		t.Fatalf("Expected %d bands copied, got %d", SpectrumBandsCount, n)
 	}
 
-	for i := range testLevels {
-		if dst[i] != testLevels[i] {
-			t.Errorf("Band %d: expected %.2f, got %.2f", i, testLevels[i], dst[i])
+	for i := range testLevelsL {
+		if dstL[i] != testLevelsL[i] {
+			t.Errorf("Left Band %d: expected %.2f, got %.2f", i, testLevelsL[i], dstL[i])
+		}
+		if dstR[i] != testLevelsR[i] {
+			t.Errorf("Right Band %d: expected %.2f, got %.2f", i, testLevelsR[i], dstR[i])
 		}
 	}
 
 	// Partial copy
-	var partial [4]float32
-	n = as.CopyTo(partial[:])
+	var partialL, partialR [4]float32
+	n = as.CopyTo(partialL[:], partialR[:])
 	if n != 4 {
 		t.Fatalf("Expected 4 bands copied, got %d", n)
 	}
 	for i := 0; i < 4; i++ {
-		if partial[i] != testLevels[i] {
-			t.Errorf("Partial band %d: expected %.2f, got %.2f", i, testLevels[i], partial[i])
+		if partialL[i] != testLevelsL[i] {
+			t.Errorf("Partial Left band %d: expected %.2f, got %.2f", i, testLevelsL[i], partialL[i])
+		}
+		if partialR[i] != testLevelsR[i] {
+			t.Errorf("Partial Right band %d: expected %.2f, got %.2f", i, testLevelsR[i], partialR[i])
 		}
 	}
 }
 
 func TestAtomicSpectrum_ZeroAllocations(t *testing.T) {
 	as := NewAtomicSpectrum()
-	var testLevels [SpectrumBandsCount]float32
-	var dst [SpectrumBandsCount]float32
+	var testLevelsL, testLevelsR [SpectrumBandsCount]float32
+	var dstL, dstR [SpectrumBandsCount]float32
 
 	// Verify Set has 0 heap allocations
 	setAllocs := testing.AllocsPerRun(100, func() {
-		as.Set(&testLevels)
+		as.Set(&testLevelsL, &testLevelsR)
 	})
 	if setAllocs != 0 {
 		t.Errorf("Expected 0 allocations in AtomicSpectrum.Set, got %.2f", setAllocs)
@@ -88,7 +98,7 @@ func TestAtomicSpectrum_ZeroAllocations(t *testing.T) {
 
 	// Verify CopyTo has 0 heap allocations
 	copyAllocs := testing.AllocsPerRun(100, func() {
-		as.CopyTo(dst[:])
+		as.CopyTo(dstL[:], dstR[:])
 	})
 	if copyAllocs != 0 {
 		t.Errorf("Expected 0 allocations in AtomicSpectrum.CopyTo, got %.2f", copyAllocs)
@@ -104,7 +114,7 @@ func TestAtomicSpectrum_ConcurrentAccess(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		var levels [SpectrumBandsCount]float32
+		var levelsL, levelsR [SpectrumBandsCount]float32
 		var counter float32
 		for {
 			select {
@@ -112,10 +122,11 @@ func TestAtomicSpectrum_ConcurrentAccess(t *testing.T) {
 				return
 			default:
 				counter += 0.1
-				for i := range levels {
-					levels[i] = counter + float32(i)
+				for i := range levelsL {
+					levelsL[i] = counter + float32(i)
+					levelsR[i] = counter - float32(i)
 				}
-				as.Set(&levels)
+				as.Set(&levelsL, &levelsR)
 			}
 		}
 	}()
@@ -125,13 +136,13 @@ func TestAtomicSpectrum_ConcurrentAccess(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			var buf [SpectrumBandsCount]float32
+			var bufL, bufR [SpectrumBandsCount]float32
 			for {
 				select {
 				case <-stop:
 					return
 				default:
-					n := as.CopyTo(buf[:])
+					n := as.CopyTo(bufL[:], bufR[:])
 					if n != SpectrumBandsCount {
 						t.Errorf("Concurrent read expected %d bands, got %d", SpectrumBandsCount, n)
 						return

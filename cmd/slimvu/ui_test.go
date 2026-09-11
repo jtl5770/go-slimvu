@@ -168,7 +168,7 @@ func TestModelViewRendering_UnsyncedSuppressesTrackInfoAndCover(t *testing.T) {
 		Elapsed:  60,
 	}
 	m.hasTrack = true
-	m.cachedRawTitle = "SlimVU Orphan Artist · SlimVU Orphan Album · SlimVU Orphan Title"
+	m.cachedRawTitle = "SlimVU Orphan Artist • SlimVU Orphan Album • SlimVU Orphan Title"
 	m.cachedTitleRunes = []rune(m.cachedRawTitle)
 
 	view := m.View()
@@ -210,7 +210,7 @@ func TestModelViewRendering_Synced(t *testing.T) {
 		Elapsed:  60,
 	}
 	m.hasTrack = true
-	m.cachedRawTitle = "Test Artist · Test Album · Test Song"
+	m.cachedRawTitle = "Test Artist • Test Album • Test Song"
 	m.cachedTitleRunes = []rune(m.cachedRawTitle)
 
 	viewPlaying := m.View()
@@ -401,7 +401,7 @@ func TestRenderHeader_DynamicFlushRight(t *testing.T) {
 		Duration: 180,
 		Elapsed:  30,
 	}
-	m.cachedRawTitle = "Artist 1 · Track 1"
+	m.cachedRawTitle = "Artist 1 • Track 1"
 	m.cachedTitleRunes = []rune(m.cachedRawTitle)
 
 	trackLine := m.renderTrackInfo(totalWidth)
@@ -425,5 +425,72 @@ func TestRenderHeader_DynamicFlushRight(t *testing.T) {
 	}
 	if lipgloss.Width(scaleSpec) != totalWidth {
 		t.Errorf("expected spectrum scale width %d to equal totalWidth %d, got %d", totalWidth, totalWidth, lipgloss.Width(scaleSpec))
+	}
+}
+
+func TestUI_SpectrumDynamicGatingWithProvider(t *testing.T) {
+	provider, err := slimvu.NewProvider(slimvu.Config{
+		Server:        "127.0.0.1",
+		SlimProtoPort: 3483,
+		JSONRPCPort:   9000,
+	})
+	if err != nil {
+		t.Fatalf("failed to create provider: %v", err)
+	}
+
+	// Initially disabled via initialModel
+	m := initialModel(provider, -60, 0, 30, 250*time.Millisecond, 20.0, false, 1.6)
+	if provider.IsSpectrumEnabled() {
+		t.Error("expected provider spectrum to be disabled initially")
+	}
+
+	// Press 't' -> enable spectrum
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	m = updated.(model)
+	if !m.showSpectrum {
+		t.Error("expected showSpectrum=true in model")
+	}
+	if !provider.IsSpectrumEnabled() {
+		t.Error("expected provider spectrum to be enabled after 't'")
+	}
+
+	// Press 't' -> disable spectrum
+	updated2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	m = updated2.(model)
+	if m.showSpectrum {
+		t.Error("expected showSpectrum=false in model")
+	}
+	if provider.IsSpectrumEnabled() {
+		t.Error("expected provider spectrum to be disabled after 't' toggle off")
+	}
+}
+
+func TestUI_SpectrumStereoMonoAveraging(t *testing.T) {
+	provider, err := slimvu.NewProvider(slimvu.Config{
+		Server:        "127.0.0.1",
+		SlimProtoPort: 3483,
+		JSONRPCPort:   9000,
+	})
+	if err != nil {
+		t.Fatalf("failed to create provider: %v", err)
+	}
+
+	m := initialModel(provider, -60, 0, 30, 250*time.Millisecond, 20.0, false, 1.6)
+	m.showSpectrum = true
+
+	m.specLeft[0] = -10.0
+	m.specRight[0] = -30.0
+	m.specLeft[5] = 0.0
+	m.specRight[5] = -6.0
+
+	for i := 0; i < len(m.spectrumBands); i++ {
+		m.spectrumBands[i] = (m.specLeft[i] + m.specRight[i]) / 2.0
+	}
+
+	if m.spectrumBands[0] != -20.0 {
+		t.Errorf("expected band 0 average (-10 + -30)/2 = -20.0, got %.2f", m.spectrumBands[0])
+	}
+	if m.spectrumBands[5] != -3.0 {
+		t.Errorf("expected band 5 average (0 + -6)/2 = -3.0, got %.2f", m.spectrumBands[5])
 	}
 }

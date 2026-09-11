@@ -30,19 +30,22 @@ type LevelsProvider interface {
 	GetLevels() (leftDB, rightDB float64, playing bool)
 }
 
-// SpectrumProvider yields real-time 16-band frequency spectrum measurements.
+// SpectrumProvider yields real-time 16-band stereo frequency spectrum measurements.
 type SpectrumProvider interface {
-	// GetSpectrum copies current 16-band spectrum levels into dst.
-	// Returns the number of bands copied (min(len(dst), 16)).
-	GetSpectrum(dst []float32) int
+	// GetSpectrum copies current 16-band stereo spectrum levels into dstLeft and dstRight.
+	// Returns the number of bands copied per channel (min(len(dstLeft), len(dstRight), 16)).
+	GetSpectrum(dstLeft, dstRight []float32) int
+	// SetSpectrumEnabled dynamically enables or disables FFT computation.
+	SetSpectrumEnabled(enabled bool)
+	// IsSpectrumEnabled reports whether FFT computation is currently active.
+	IsSpectrumEnabled() bool
 }
 
 // AudioProvider composites level metering, spectrum analysis, and service lifecycle.
 type AudioProvider interface {
 	LevelsProvider
 	SpectrumProvider
-	// Start starts the audio provider background worker and performs initial server discovery.
-	// Start must be called before querying levels or player state.
+	// Start starts the audio provider background worker and performs initial server discovery.\n\t// Start must be called before querying levels or player state.
 	Start() error
 	// Stop stops the audio provider and gracefully cleans up resources.
 	Stop() error
@@ -60,7 +63,7 @@ func NewAtomicLevels() *AtomicLevels {
 	return slimproto.NewAtomicLevels()
 }
 
-// AtomicSpectrum stores real-time 16-band audio spectrum levels using atomic 32-bit floats,
+// AtomicSpectrum stores real-time 16-band stereo audio spectrum levels using atomic 32-bit floats,
 // guaranteeing 100% lock-free, zero-allocation operations on both read and write paths.
 type AtomicSpectrum = slimproto.AtomicSpectrum
 

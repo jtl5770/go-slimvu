@@ -73,6 +73,8 @@ type model struct {
 	popup syncPopup
 
 	showSpectrum  bool
+	specLeft      [16]float32
+	specRight     [16]float32
 	spectrumBands [16]float32
 	specBuf       *spectrumBuffers
 	vuBuf         *vuBarBuffers
@@ -118,6 +120,7 @@ func initialModel(provider *slimvu.SqueezeboxAudioProvider, minDB, maxDB float64
 	autoSync := false
 	if provider != nil {
 		autoSync = provider.GetAutoSync()
+		provider.SetSpectrumEnabled(false)
 	}
 
 	return model{
@@ -235,6 +238,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "t":
 			m.showSpectrum = !m.showSpectrum
+			if m.provider != nil {
+				m.provider.SetSpectrumEnabled(m.showSpectrum)
+			}
 			return m, nil
 		}
 
@@ -269,9 +275,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.lastUpdate = now
 
-		m.leftDB, m.rightDB, m.playing = m.provider.GetLevels()
 		if m.provider != nil {
-			m.provider.GetSpectrum(m.spectrumBands[:])
+			m.leftDB, m.rightDB, m.playing = m.provider.GetLevels()
+			if m.showSpectrum {
+				m.provider.GetSpectrum(m.specLeft[:], m.specRight[:])
+				for i := 0; i < len(m.spectrumBands); i++ {
+					m.spectrumBands[i] = (m.specLeft[i] + m.specRight[i]) / 2.0
+				}
+			}
+			m.syncedMAC, m.syncedName = m.provider.SyncedWith()
+			m.autoSync = m.provider.GetAutoSync()
+			m.track, m.hasTrack = m.provider.GetTrackInfo()
 		}
 
 		// Smooth dB readouts for human readability (~300ms time constant)
@@ -295,9 +309,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		m.syncedMAC, m.syncedName = m.provider.SyncedWith()
-		m.autoSync = m.provider.GetAutoSync()
-		m.track, m.hasTrack = m.provider.GetTrackInfo()
+		if m.popup.IsVisible() && m.provider != nil {
+			m.popup.SetPlayers(m.provider.GetAllPlayers())
+		}
 
 		if m.hasTrack {
 			trackKey := fmt.Sprintf("%s|%s|%s", m.track.Artist, m.track.Album, m.track.Title)
@@ -320,10 +334,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cachedTrackKey = ""
 			m.cachedRawTitle = ""
 			m.cachedTitleRunes = nil
-		}
-
-		if m.popup.IsVisible() {
-			m.popup.SetPlayers(m.provider.GetAllPlayers())
 		}
 
 		var artworkCmd tea.Cmd

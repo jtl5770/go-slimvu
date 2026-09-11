@@ -27,38 +27,53 @@ import (
 // SpectrumBandsCount defines the standard 16 logarithmic frequency bands.
 const SpectrumBandsCount = dsp.SpectrumBandsCount
 
-// AtomicSpectrum stores real-time 16-band audio spectrum levels using atomic 32-bit floats.
+// AtomicSpectrum stores real-time 16-band stereo audio spectrum levels using atomic 32-bit floats.
 // Provides 100% lock-free, zero-allocation, thread-safe access on both read and write paths.
 type AtomicSpectrum struct {
-	bands [SpectrumBandsCount]atomic.Uint32
+	bandsLeft  [SpectrumBandsCount]atomic.Uint32
+	bandsRight [SpectrumBandsCount]atomic.Uint32
 }
 
-// NewAtomicSpectrum creates an initialized AtomicSpectrum with silence (-100 dBFS) across all bands.
+// NewAtomicSpectrum creates an initialized AtomicSpectrum with silence (-100 dBFS) across all stereo bands.
 func NewAtomicSpectrum() *AtomicSpectrum {
 	as := &AtomicSpectrum{}
 	silenceBits := math.Float32bits(float32(dsp.SilenceFloorDB))
 	for b := 0; b < SpectrumBandsCount; b++ {
-		as.bands[b].Store(silenceBits)
+		as.bandsLeft[b].Store(silenceBits)
+		as.bandsRight[b].Store(silenceBits)
 	}
 	return as
 }
 
-// Set stores all 16 frequency band levels atomically with zero heap allocations.
-func (a *AtomicSpectrum) Set(levels *[SpectrumBandsCount]float32) {
+// Set stores all 16 Left and Right frequency band levels atomically with zero heap allocations.
+func (a *AtomicSpectrum) Set(levelsLeft, levelsRight *[SpectrumBandsCount]float32) {
 	for b := 0; b < SpectrumBandsCount; b++ {
-		a.bands[b].Store(math.Float32bits(levels[b]))
+		a.bandsLeft[b].Store(math.Float32bits(levelsLeft[b]))
+		a.bandsRight[b].Store(math.Float32bits(levelsRight[b]))
 	}
 }
 
-// CopyTo copies the current spectrum levels into dst and returns the number of bands copied.
+// CopyTo copies the current stereo spectrum levels into dstLeft and dstRight and returns the number of bands copied per channel.
 // Operates lock-free, thread-safe, and with 0 heap allocations.
-func (a *AtomicSpectrum) CopyTo(dst []float32) int {
-	n := len(dst)
-	if n > SpectrumBandsCount {
-		n = SpectrumBandsCount
+func (a *AtomicSpectrum) CopyTo(dstLeft, dstRight []float32) int {
+	nL := len(dstLeft)
+	if nL > SpectrumBandsCount {
+		nL = SpectrumBandsCount
 	}
-	for b := 0; b < n; b++ {
-		dst[b] = math.Float32frombits(a.bands[b].Load())
+	for b := 0; b < nL; b++ {
+		dstLeft[b] = math.Float32frombits(a.bandsLeft[b].Load())
 	}
-	return n
+
+	nR := len(dstRight)
+	if nR > SpectrumBandsCount {
+		nR = SpectrumBandsCount
+	}
+	for b := 0; b < nR; b++ {
+		dstRight[b] = math.Float32frombits(a.bandsRight[b].Load())
+	}
+
+	if nL < nR {
+		return nL
+	}
+	return nR
 }

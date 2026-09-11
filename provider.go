@@ -194,10 +194,25 @@ func (s *SqueezeboxAudioProvider) GetLevels() (leftDB, rightDB float64, playing 
 	return s.levels.Get()
 }
 
-// GetSpectrum copies current 16-band spectrum levels into dst and returns the number of bands copied.
+// GetSpectrum copies current 16-band stereo spectrum levels into dstLeft and dstRight and returns the number of bands copied per channel.
 // Operates lock-free, thread-safe, and with 0 heap allocations.
-func (s *SqueezeboxAudioProvider) GetSpectrum(dst []float32) int {
-	return s.spectrum.CopyTo(dst)
+func (s *SqueezeboxAudioProvider) GetSpectrum(dstLeft, dstRight []float32) int {
+	return s.spectrum.CopyTo(dstLeft, dstRight)
+}
+
+// SetSpectrumEnabled dynamically enables or disables FFT computation.
+func (s *SqueezeboxAudioProvider) SetSpectrumEnabled(enabled bool) {
+	if s.proto != nil {
+		s.proto.SetSpectrumEnabled(enabled)
+	}
+}
+
+// IsSpectrumEnabled reports whether FFT computation is currently active.
+func (s *SqueezeboxAudioProvider) IsSpectrumEnabled() bool {
+	if s.proto != nil {
+		return s.proto.IsSpectrumEnabled()
+	}
+	return false
 }
 
 // Start starts the SlimProto client and PlayerManager.

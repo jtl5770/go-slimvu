@@ -29,9 +29,9 @@ const (
 	MaxRingBufferSize = 8192
 	// ringMask enables single-cycle bitwise masking instead of signed modulo division.
 	ringMask = MaxRingBufferSize - 1
-	// invMaxPCM32 converts sum of two 16-bit signed PCM channels [-65536, 65534] to [-1.0, 1.0].
-	invMaxPCM32 = float32(1.0 / 65536.0)
-	// DefaultDecayRateDBPerSec is the ballistic decay speed in dB per second (60 dB/s).
+	// invMaxPCM16 converts a 16-bit signed PCM sample [-32768, 32767] to [-1.0, 1.0].
+	invMaxPCM16 = float32(1.0 / 32768.0)
+	// DefaultDecayRateDBPerSec is the ballistic decay speed in dB per second (100 dB/s).
 	DefaultDecayRateDBPerSec = 100.0
 	// minMagSqClamp clamps squared magnitude before log10 to prevent evaluation below -100 dBFS ((1e-5)^2 = 1e-10).
 	minMagSqClamp = 1e-10
@@ -50,7 +50,9 @@ var bandTiltDB = [16]float32{
 	0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5,
 }
 
-// SpectrumAnalyzer computes real-time 16-band spectrum measurements from continuous stereo PCM.
+// SpectrumAnalyzer computes real-time 16-band stereo spectrum measurements from continuous stereo PCM.
+// It leverages a single complex radix-2 FFT to compute both Left and Right spectrums simultaneously
+// via complex conjugate decomposition, achieving full stereo analysis at virtually zero extra CPU cost.
 // All working buffers are pre-allocated upfront, ensuring 100% zero heap allocations in the hot path.
 type bandBinRange struct {
 	kStart int
@@ -58,24 +60,27 @@ type bandBinRange struct {
 }
 
 type SpectrumAnalyzer struct {
-	ringBuf        [MaxRingBufferSize]float32
+	ringBufL       [MaxRingBufferSize]float32
+	ringBufR       [MaxRingBufferSize]float32
 	ringPos        int
 	realBuf        [MaxRingBufferSize]float32
 	imagBuf        [MaxRingBufferSize]float32
-	levels         [SpectrumBandsCount]float32
+	levelsLeft     [SpectrumBandsCount]float32
+	levelsRight    [SpectrumBandsCount]float32
 	decayRate      float32
 	lastSampleRate uint32
 	lastN          int
 	bandRanges     [SpectrumBandsCount]bandBinRange
 }
 
-// NewSpectrumAnalyzer creates an initialized SpectrumAnalyzer with silence (-100 dBFS).
+// NewSpectrumAnalyzer creates an initialized SpectrumAnalyzer with silence (-100 dBFS) on both channels.
 func NewSpectrumAnalyzer() *SpectrumAnalyzer {
 	sa := &SpectrumAnalyzer{
 		decayRate: DefaultDecayRateDBPerSec,
 	}
-	for i := range sa.levels {
-		sa.levels[i] = float32(SilenceFloorDB)
+	for i := range sa.levelsLeft {
+		sa.levelsLeft[i] = float32(SilenceFloorDB)
+		sa.levelsRight[i] = float32(SilenceFloorDB)
 	}
 	return sa
 }
@@ -101,14 +106,14 @@ func SelectFFTSize(sampleRate uint32) int {
 	}
 }
 
-// Process pushes incoming 16-bit stereo LittleEndian PCM audio, executes the windowed FFT,
-// applies 16-band logarithmic aggregation, spectral tilt, and ballistics smoothing,
-// and copies the resulting dB levels into dst.
+// Process pushes incoming 16-bit stereo LittleEndian PCM audio, executes the windowed stereo FFT,
+// applies 16-band logarithmic aggregation, spectral tilt, and ballistics smoothing for both Left and Right channels,
+// and copies the resulting dB levels into dstLeft and dstRight (if non-nil).
 // Operates with zero heap allocations.
-func (s *SpectrumAnalyzer) Process(pcm []byte, sampleRate uint32, dtSeconds float32, dst *[SpectrumBandsCount]float32) {
+func (s *SpectrumAnalyzer) Process(pcm []byte, sampleRate uint32, dtSeconds float32, dstLeft, dstRight *[SpectrumBandsCount]float32) {
 	frames := len(pcm) / Stereo16BitFrameBytes
 	if frames == 0 {
-		s.DecaySilence(dtSeconds, dst)
+		s.DecaySilence(dtSeconds, dstLeft, dstRight)
 		return
 	}
 
@@ -116,34 +121,37 @@ func (s *SpectrumAnalyzer) Process(pcm []byte, sampleRate uint32, dtSeconds floa
 		sampleRate = 44100
 	}
 
-	// 1. Ingest PCM samples into ring buffer
+	// 1. Ingest stereo PCM samples into Left and Right ring buffers
 	s.ingestStereoPCM(pcm)
 
 	// 2. Select precomputed FFT plan
 	n := SelectFFTSize(sampleRate)
 	plan := getFFTPlan(n)
 	if plan == nil {
-		s.DecaySilence(dtSeconds, dst)
+		s.DecaySilence(dtSeconds, dstLeft, dstRight)
 		return
 	}
 
-	// 3. Extract the last N samples and apply Hann window
+	// 3. Extract the last N samples, apply Hann window, and pack Left into real and Right into imag
 	s.applyWindow(n, plan)
 
-	// 4. Compute in-place FFT
+	// 4. Compute in-place complex FFT (both channels transformed simultaneously)
 	plan.computeRadix2FFT(s.realBuf[:n], s.imagBuf[:n])
 
-	// 5. Aggregate into 16 logarithmic frequency bands with ballistics
+	// 5. Decompose complex spectrum into discrete Left & Right bands with ballistics
 	decay := s.calcDecay(dtSeconds)
 	s.aggregateBands(n, sampleRate, plan, decay)
 
 	// 6. Copy output
-	if dst != nil {
-		*dst = s.levels
+	if dstLeft != nil {
+		*dstLeft = s.levelsLeft
+	}
+	if dstRight != nil {
+		*dstRight = s.levelsRight
 	}
 }
 
-// ingestStereoPCM downmixes stereo 16-bit PCM frames to mono float32 in [-1.0, 1.0]
+// ingestStereoPCM separates stereo 16-bit PCM frames into Left and Right float32 channels in [-1.0, 1.0]
 // using single 32-bit loads and bitwise ring buffer wrapping.
 func (s *SpectrumAnalyzer) ingestStereoPCM(pcm []byte) {
 	pos := s.ringPos
@@ -151,19 +159,21 @@ func (s *SpectrumAnalyzer) ingestStereoPCM(pcm []byte) {
 		frame := binary.LittleEndian.Uint32(pcm[offset : offset+4])
 		sL := int32(int16(frame))
 		sR := int32(int16(frame >> 16))
-		s.ringBuf[pos] = float32(sL+sR) * invMaxPCM32
+		s.ringBufL[pos] = float32(sL) * invMaxPCM16
+		s.ringBufR[pos] = float32(sR) * invMaxPCM16
 		pos = (pos + 1) & ringMask
 	}
 	s.ringPos = pos
 }
 
-// applyWindow copies the last n mono samples from the ring buffer into realBuf with Hann windowing.
+// applyWindow copies the last n samples from the Left ring buffer into realBuf and Right into imagBuf with Hann windowing.
 func (s *SpectrumAnalyzer) applyWindow(n int, plan *fftPlan) {
 	start := (s.ringPos - n + MaxRingBufferSize) & ringMask
 	for k := 0; k < n; k++ {
 		idx := (start + k) & ringMask
-		s.realBuf[k] = s.ringBuf[idx] * plan.hannWindow[k]
-		s.imagBuf[k] = 0.0
+		w := plan.hannWindow[k]
+		s.realBuf[k] = s.ringBufL[idx] * w
+		s.imagBuf[k] = s.ringBufR[idx] * w
 	}
 }
 
@@ -190,8 +200,8 @@ func (s *SpectrumAnalyzer) updateBandRanges(n int, sampleRate uint32) {
 	s.lastN = n
 }
 
-// aggregateBands computes peak energy per band, converts to dBFS without runtime sqrt,
-// and applies attack and decay ballistics.
+// aggregateBands separates Left & Right frequency bins via Hermitian symmetry decomposition,
+// computes fractional-octave integrated energy per band, converts to dBFS, and applies attack/decay ballistics.
 func (s *SpectrumAnalyzer) aggregateBands(n int, sampleRate uint32, plan *fftPlan, decay float32) {
 	if sampleRate != s.lastSampleRate || n != s.lastN {
 		s.updateBandRanges(n, sampleRate)
@@ -200,35 +210,71 @@ func (s *SpectrumAnalyzer) aggregateBands(n int, sampleRate uint32, plan *fftPla
 	for b := 0; b < SpectrumBandsCount; b++ {
 		br := s.bandRanges[b]
 
-		// Sum power across all bins in this band (ANSI fractional-octave integrated energy)
-		var sumMagSq float32
+		var sumMagSqL, sumMagSqR float32
 		for k := br.kStart; k <= br.kEnd; k++ {
-			sumMagSq += s.realBuf[k]*s.realBuf[k] + s.imagBuf[k]*s.imagBuf[k]
+			rNk := s.realBuf[n-k]
+			iNk := s.imagBuf[n-k]
+			rk := s.realBuf[k]
+			ik := s.imagBuf[k]
+
+			// Left channel: X_L[k] = 0.5 * (Z[k] + conj(Z[n-k]))
+			reL := (rk + rNk) * 0.5
+			imL := (ik - iNk) * 0.5
+			sumMagSqL += reL*reL + imL*imL
+
+			// Right channel: X_R[k] = -0.5j * (Z[k] - conj(Z[n-k]))
+			reR := (ik + iNk) * 0.5
+			imR := (rNk - rk) * 0.5
+			sumMagSqR += reR*reR + imR*imR
 		}
 
-		// Fast dBFS calculation: 20 * log10(sqrt(P) * W) = 10 * log10(P) + 20 * log10(W)
-		val := float64(sumMagSq)
-		if val < minMagSqClamp {
-			val = minMagSqClamp
+		// Left channel dBFS calculation
+		valL := float64(sumMagSqL)
+		if valL < minMagSqClamp {
+			valL = minMagSqClamp
 		}
-		bandDB := float32(10.0*math.Log10(val)) + plan.normDB + bandTiltDB[b]
-
-		if bandDB < float32(SilenceFloorDB) {
-			bandDB = float32(SilenceFloorDB)
-		} else if bandDB > 0.0 {
-			bandDB = 0.0
+		bandDBL := float32(10.0*math.Log10(valL)) + plan.normDB + bandTiltDB[b]
+		if bandDBL < float32(SilenceFloorDB) {
+			bandDBL = float32(SilenceFloorDB)
+		} else if bandDBL > 0.0 {
+			bandDBL = 0.0
 		}
 
-		// Ballistics: instant rise, smooth exponential decay
-		if bandDB >= s.levels[b] {
-			s.levels[b] = bandDB
+		// Right channel dBFS calculation
+		valR := float64(sumMagSqR)
+		if valR < minMagSqClamp {
+			valR = minMagSqClamp
+		}
+		bandDBR := float32(10.0*math.Log10(valR)) + plan.normDB + bandTiltDB[b]
+		if bandDBR < float32(SilenceFloorDB) {
+			bandDBR = float32(SilenceFloorDB)
+		} else if bandDBR > 0.0 {
+			bandDBR = 0.0
+		}
+
+		// Left ballistics: instant rise, smooth decay
+		if bandDBL >= s.levelsLeft[b] {
+			s.levelsLeft[b] = bandDBL
 		} else {
-			s.levels[b] -= decay
-			if s.levels[b] < bandDB {
-				s.levels[b] = bandDB
+			s.levelsLeft[b] -= decay
+			if s.levelsLeft[b] < bandDBL {
+				s.levelsLeft[b] = bandDBL
 			}
-			if s.levels[b] < float32(SilenceFloorDB) {
-				s.levels[b] = float32(SilenceFloorDB)
+			if s.levelsLeft[b] < float32(SilenceFloorDB) {
+				s.levelsLeft[b] = float32(SilenceFloorDB)
+			}
+		}
+
+		// Right ballistics: instant rise, smooth decay
+		if bandDBR >= s.levelsRight[b] {
+			s.levelsRight[b] = bandDBR
+		} else {
+			s.levelsRight[b] -= decay
+			if s.levelsRight[b] < bandDBR {
+				s.levelsRight[b] = bandDBR
+			}
+			if s.levelsRight[b] < float32(SilenceFloorDB) {
+				s.levelsRight[b] = float32(SilenceFloorDB)
 			}
 		}
 	}
@@ -242,28 +288,36 @@ func (s *SpectrumAnalyzer) calcDecay(dtSeconds float32) float32 {
 	return decay
 }
 
-// DecaySilence decays all frequency bands toward the silence floor (-100 dBFS).
-// Used during pause, stop, or buffer underruns.
-func (s *SpectrumAnalyzer) DecaySilence(dtSeconds float32, dst *[SpectrumBandsCount]float32) {
+// DecaySilence decays all Left and Right frequency bands toward the silence floor (-100 dBFS).
+func (s *SpectrumAnalyzer) DecaySilence(dtSeconds float32, dstLeft, dstRight *[SpectrumBandsCount]float32) {
 	decay := s.calcDecay(dtSeconds)
 	for b := 0; b < SpectrumBandsCount; b++ {
-		s.levels[b] -= decay
-		if s.levels[b] < float32(SilenceFloorDB) {
-			s.levels[b] = float32(SilenceFloorDB)
+		s.levelsLeft[b] -= decay
+		if s.levelsLeft[b] < float32(SilenceFloorDB) {
+			s.levelsLeft[b] = float32(SilenceFloorDB)
+		}
+		s.levelsRight[b] -= decay
+		if s.levelsRight[b] < float32(SilenceFloorDB) {
+			s.levelsRight[b] = float32(SilenceFloorDB)
 		}
 	}
-	if dst != nil {
-		*dst = s.levels
+	if dstLeft != nil {
+		*dstLeft = s.levelsLeft
+	}
+	if dstRight != nil {
+		*dstRight = s.levelsRight
 	}
 }
 
-// Reset clears the internal ring buffer and resets all levels to silence.
+// Reset clears the internal ring buffers and resets all levels to silence.
 func (s *SpectrumAnalyzer) Reset() {
-	for i := range s.ringBuf {
-		s.ringBuf[i] = 0
+	for i := range s.ringBufL {
+		s.ringBufL[i] = 0
+		s.ringBufR[i] = 0
 	}
 	s.ringPos = 0
-	for i := range s.levels {
-		s.levels[i] = float32(SilenceFloorDB)
+	for i := range s.levelsLeft {
+		s.levelsLeft[i] = float32(SilenceFloorDB)
+		s.levelsRight[i] = float32(SilenceFloorDB)
 	}
 }

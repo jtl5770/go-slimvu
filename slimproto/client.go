@@ -130,12 +130,13 @@ func NewClient(serverAddr string, heloConfig HeloConfig, levels *AtomicLevels, s
 	}
 
 	c.consumer = NewPacedConsumer(PacedConsumerConfig{
-		TickInterval: 10 * time.Millisecond,
-		RingBuffer:   rb,
-		Levels:       levels,
-		Spectrum:     spec,
-		Clock:        clock,
-		Callbacks:    c,
+		TickInterval:    10 * time.Millisecond,
+		RingBuffer:      rb,
+		Levels:          levels,
+		Spectrum:        spec,
+		SpectrumEnabled: false,
+		Clock:           clock,
+		Callbacks:       c,
 	})
 
 	c.transport = NewTCPTransport(TransportConfig{
@@ -158,6 +159,21 @@ func (c *Client) Levels() *AtomicLevels {
 // Spectrum returns the AtomicSpectrum instance associated with this client.
 func (c *Client) Spectrum() *AtomicSpectrum {
 	return c.spectrum
+}
+
+// SetSpectrumEnabled dynamically enables or disables 16-band spectrum FFT computation.
+func (c *Client) SetSpectrumEnabled(enabled bool) {
+	if c.consumer != nil {
+		c.consumer.SetSpectrumEnabled(enabled)
+	}
+}
+
+// IsSpectrumEnabled reports whether spectrum FFT computation is currently active.
+func (c *Client) IsSpectrumEnabled() bool {
+	if c.consumer != nil {
+		return c.consumer.IsSpectrumEnabled()
+	}
+	return false
 }
 
 // GetSampleRate returns the current stream sample rate dynamically.

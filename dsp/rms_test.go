@@ -73,3 +73,18 @@ func BenchmarkCalculateLevels(b *testing.B) {
 		CalculateLevels(pcm)
 	}
 }
+
+func BenchmarkCalculateLevels_10ms_44k(b *testing.B) {
+	frames := 441 // 10ms @ 44.1kHz
+	pcm := make([]byte, frames*4)
+	for i := 0; i < frames; i++ {
+		binary.LittleEndian.PutUint16(pcm[i*4:], uint16(16000))
+		binary.LittleEndian.PutUint16(pcm[i*4+2:], uint16(16000))
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		CalculateLevels(pcm)
+	}
+}

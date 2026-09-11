@@ -62,15 +62,31 @@ func TestSqueezeboxAudioProvider_ExplicitHost(t *testing.T) {
 		t.Errorf("Expected initial levels -100/-100 false, got %f/%f %v", left, right, playing)
 	}
 
-	var bands [SpectrumBandsCount]float32
-	n := provider.GetSpectrum(bands[:])
+	var bandsL, bandsR [SpectrumBandsCount]float32
+	n := provider.GetSpectrum(bandsL[:], bandsR[:])
 	if n != SpectrumBandsCount {
 		t.Errorf("Expected %d spectrum bands copied, got %d", SpectrumBandsCount, n)
 	}
-	for b, val := range bands {
-		if val != -100.0 {
-			t.Errorf("Band %d: expected -100.0 initial silence, got %.2f", b, val)
+	for b := 0; b < SpectrumBandsCount; b++ {
+		if bandsL[b] != -100.0 {
+			t.Errorf("Left Band %d: expected -100.0 initial silence, got %.2f", b, bandsL[b])
 		}
+		if bandsR[b] != -100.0 {
+			t.Errorf("Right Band %d: expected -100.0 initial silence, got %.2f", b, bandsR[b])
+		}
+	}
+
+	// Test spectrum enable/disable
+	if provider.IsSpectrumEnabled() {
+		t.Error("Expected spectrum to be disabled initially")
+	}
+	provider.SetSpectrumEnabled(true)
+	if !provider.IsSpectrumEnabled() {
+		t.Error("Expected spectrum to be enabled after SetSpectrumEnabled(true)")
+	}
+	provider.SetSpectrumEnabled(false)
+	if provider.IsSpectrumEnabled() {
+		t.Error("Expected spectrum to be disabled after SetSpectrumEnabled(false)")
 	}
 }
 
@@ -253,12 +269,12 @@ func BenchmarkSqueezeboxAudioProvider_GetSpectrum(b *testing.B) {
 		b.Fatalf("Failed to create provider: %v", err)
 	}
 
-	var buf [SpectrumBandsCount]float32
+	var bufL, bufR [SpectrumBandsCount]float32
 
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_ = provider.GetSpectrum(buf[:])
+		_ = provider.GetSpectrum(bufL[:], bufR[:])
 	}
 }
